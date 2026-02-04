@@ -1,10 +1,10 @@
 from pydantic import BaseModel
-from typing import Optional, Dict
+from typing import Optional, List, Dict
 
 class TaskItem(BaseModel):
     id: Optional[str] = None
-    title: str       # שם המוצר (למשל "Milk")
-    category: str    # קטגוריה (למשל "Supermarket")
+    title: str
+    category: str
     is_completed: bool = False
 
 class LocationUpdate(BaseModel):
@@ -14,4 +14,4 @@ class LocationUpdate(BaseModel):
 class StoreDeal(BaseModel):
     store: str
     distance: int
-    found_items: list
+    found_items: List[Dict[str, float]]

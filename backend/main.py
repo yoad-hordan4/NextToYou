@@ -3,12 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from uuid import uuid4
 
-# ייבוא מהקבצים החדשים שלנו
+# Import from our new modules
 from models import TaskItem, LocationUpdate
 from store_logic import find_nearby_deals
 
 app = FastAPI()
 
+# Allow connections from anywhere (Frontend, Mobile, etc.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,12 +18,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- זיכרון זמני למשימות ---
+# In-Memory Database (resets when server restarts)
 tasks_db = []
 
 @app.get("/")
 def read_root():
-    return {"status": "NextToYou Cloud Server is Running"}
+    return {"status": "NextToYou Server is Online"}
 
 @app.get("/tasks", response_model=List[TaskItem])
 def get_tasks():
@@ -42,13 +43,10 @@ def delete_task(task_id: str):
 
 @app.post("/check-proximity")
 def check_proximity(loc: LocationUpdate):
-    # שליפת רשימת הקניות הפעילה
     needed_items = [t.title for t in tasks_db if not t.is_completed]
     
     if not needed_items:
         return {"message": "No active tasks."}
 
-    # שימוש בלוגיקה מהקובץ הנפרד
     deals = find_nearby_deals(loc.latitude, loc.longitude, needed_items)
-    
     return {"nearby": deals}

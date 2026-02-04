@@ -1,6 +1,7 @@
 import math
 
-# --- Mock Database ---
+# This Mock DB simulates a real database. 
+# On a real server, this would be replaced by a SQL query.
 STORES_DB = [
     {
         "name": "Super-Pharm Center",
@@ -11,14 +12,8 @@ STORES_DB = [
     {
         "name": "Mega City",
         "category": "Supermarket",
-        "lat": 32.0870, "lon": 34.7830, # עדכן לקואורדינטות שלך לבדיקה
+        "lat": 32.0870, "lon": 34.7830, # Update this for testing
         "inventory": { "milk": 5.90, "bread": 7.50, "eggs": 12.00 }
-    },
-    {
-        "name": "Shufersal Deal",
-        "category": "Supermarket",
-        "lat": 32.0853, "lon": 34.7818, # עדכן לקואורדינטות שלך לבדיקה
-        "inventory": { "milk": 6.50, "bread": 6.90 }
     },
     {
         "name": "Moshiko Hardware",
@@ -29,7 +24,7 @@ STORES_DB = [
 ]
 
 def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371000 # רדיוס כדור הארץ במטרים
+    R = 6371000 # Earth radius in meters
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
@@ -38,7 +33,7 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-def find_nearby_deals(user_lat, user_lon, needed_items, radius=200):
+def find_nearby_deals(user_lat, user_lon, needed_items, radius=500):
     nearby_deals = []
     
     for store in STORES_DB:
@@ -47,7 +42,7 @@ def find_nearby_deals(user_lat, user_lon, needed_items, radius=200):
         if dist <= radius:
             found_items = []
             for item in needed_items:
-                # חיפוש רגיש (Case Insensitive)
+                # Case-insensitive search
                 for store_item, price in store["inventory"].items():
                     if item.lower() in store_item.lower(): 
                         found_items.append({"item": store_item, "price": price})
@@ -60,7 +55,7 @@ def find_nearby_deals(user_lat, user_lon, needed_items, radius=200):
                     "found_items": found_items
                 })
 
-    # מיון לפי המחיר הזול ביותר של הפריט הראשון שנמצא
+    # Sort by cheapest price found
     if nearby_deals:
         nearby_deals.sort(key=lambda x: x["found_items"][0]["price"])
         
