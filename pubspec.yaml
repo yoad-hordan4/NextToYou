@@ -1,0 +1,34 @@
+name: next_to_you
+description: A location-based personal assistant app.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # ניהול מצב (State Management) - לניהול רשימת הקניות והסידורים
+  provider: ^6.0.0
+
+  # שירותי מיקום - לזיהוי הרדיוס של המשתמש (50 מטר מבית העסק)
+  geolocator: ^10.1.0
+
+  # התראות מקומיות - לשליחת Push כשהמשתמש באזור רלוונטי
+  flutter_local_notifications: ^16.0.0
+
+  # שמירת נתונים מקומית - לשמירת הרשימה על המכשיר (MVP)
+  shared_preferences: ^2.2.0
+  
+  # יצירת מזהים ייחודיים למשימות
+  uuid: ^4.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
