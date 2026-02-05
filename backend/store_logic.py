@@ -1,27 +1,6 @@
 import math
-
-# This Mock DB simulates a real database. 
-# On a real server, this would be replaced by a SQL query.
-STORES_DB = [
-    {
-        "name": "Super-Pharm Center",
-        "category": "Pharmacy",
-        "lat": 32.0860, "lon": 34.7820,
-        "inventory": { "materna": 45.0, "diapers": 60.0, "pacifier": 15.0 }
-    },
-    {
-        "name": "Mega City",
-        "category": "Supermarket",
-        "lat": 32.0870, "lon": 34.7830, # Update this for testing
-        "inventory": { "milk": 5.90, "bread": 7.50, "eggs": 12.00 }
-    },
-    {
-        "name": "Moshiko Hardware",
-        "category": "Hardware",
-        "lat": 32.0855, "lon": 34.7815,
-        "inventory": { "paint": 80.0, "hammer": 45.0 }
-    }
-]
+# IMPORT THE NEW DATA
+from mock_data import STORES_DB
 
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371000 # Earth radius in meters
@@ -33,17 +12,19 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-def find_nearby_deals(user_lat, user_lon, needed_items, radius=500):
+def find_nearby_deals(user_lat, user_lon, needed_items, radius=5000):
     nearby_deals = []
     
     for store in STORES_DB:
         dist = calculate_distance(user_lat, user_lon, store["lat"], store["lon"])
         
+        # Only check stores within radius
         if dist <= radius:
             found_items = []
             for item in needed_items:
-                # Case-insensitive search
+                # Search inside the store's inventory
                 for store_item, price in store["inventory"].items():
+                    # "milk" matches "Soy Milk" or "Milk 3%"
                     if item.lower() in store_item.lower(): 
                         found_items.append({"item": store_item, "price": price})
             
@@ -51,12 +32,14 @@ def find_nearby_deals(user_lat, user_lon, needed_items, radius=500):
                 nearby_deals.append({
                     "store": store["name"],
                     "category": store["category"],
+                    "lat": store["lat"], 
+                    "lon": store["lon"],
                     "distance": int(dist),
                     "found_items": found_items
                 })
 
-    # Sort by cheapest price found
+    # Sort by Price (Cheapest first) -> Then by Distance
     if nearby_deals:
-        nearby_deals.sort(key=lambda x: x["found_items"][0]["price"])
+        nearby_deals.sort(key=lambda x: (x["found_items"][0]["price"], x["distance"]))
         
     return nearby_deals
