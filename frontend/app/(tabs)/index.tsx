@@ -50,7 +50,7 @@ export default function HomeScreen() {
     if (status !== 'granted') return;
 
     await Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.High, distanceInterval: 20 },
+      { accuracy: Location.Accuracy.High, distanceInterval: 5 },
       (newLocation) => {
         setLocation(newLocation);
         checkProximity(newLocation.coords.latitude, newLocation.coords.longitude);
@@ -129,13 +129,24 @@ export default function HomeScreen() {
 
   const addTask = async () => {
     if (!text) return;
+    
+    // 1. הוספת המשימה לשרת
     await fetch(`${API_BASE}/tasks`, {
       method: 'POST',
       headers: API_HEADERS,
       body: JSON.stringify({ title: text, category, is_completed: false }),
     });
+    
     setText('');
     fetchTasks();
+
+    // 2. תיקון: בדיקה מיידית האם אני *כבר* ליד חנות עם הפריט הזה
+    if (location) {
+      console.log("Checking proximity for new item...");
+      // אופציונלי: איפוס הטיימר כדי להבטיח שההתראה תקפוץ גם אם קיבלת אחת לפני דקה
+      lastNotificationTime.current = 0; 
+      checkProximity(location.coords.latitude, location.coords.longitude);
+    }
   };
 
   const deleteTask = async (id: string) => {
