@@ -1,11 +1,18 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TextInput, Button, FlatList, TouchableOpacity, SafeAreaView, KeyboardAvoidingView, Alert, Platform, Modal, Linking, Dimensions } from 'react-native';
+import { StyleSheet, Text, View, TextInput, Button, FlatList, TouchableOpacity, SafeAreaView, KeyboardAvoidingView, Alert, Platform, Modal, Linking, LayoutAnimation, UIManager } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps'; // <--- NEW MAP IMPORT
+import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router } from 'expo-router';
 import { API_BASE, API_HEADERS } from '@/constants/config';
 
-// Notification Setup
+// Enable Animations for Android
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+// --- NOTIFICATION SETUP ---
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -23,50 +30,96 @@ interface Task {
 }
 
 export default function HomeScreen() {
+  // User & Data State
+  const [user, setUser] = useState<any>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [text, setText] = useState('');
   const [category, setCategory] = useState('Supermarket');
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
   
-  // Modal & Search State
+  // Location & Tracking State
+  const [location, setLocation] = useState<Location.LocationObject | null>(null);
+  const [isTracking, setIsTracking] = useState(false);
+  
+  // Modal & Map State
+  const [modalVisible, setModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const [itemDeals, setItemDeals] = useState<any[]>([]);
-  const [modalVisible, setModalVisible] = useState(false);
+  
   const lastNotificationTime = useRef<number>(0);
 
   useEffect(() => {
-    fetchTasks();
-    setupNotifications();
-    startLocationTracking();
+    checkLogin();
   }, []);
 
-  const setupNotifications = async () => {
-    const { status } = await Notifications.requestPermissionsAsync();
-    if (status !== 'granted') alert('Enable notifications for alerts!');
+  // 1. AUTH CHECK
+  const checkLogin = async () => {
+    const session = await AsyncStorage.getItem('user_session');
+    if (!session) {
+      // Redirect to login if no session found
+      router.replace('/login'); 
+      return;
+    }
+    const userData = JSON.parse(session);
+    setUser(userData);
+    
+    // Load data for this user
+    fetchTasks(userData.username);
+    startSmartTracking(userData);
   };
 
-  const startLocationTracking = async () => {
+  const logout = async () => {
+    await AsyncStorage.removeItem('user_session');
+    router.replace('/login');
+  };
+
+  // 2. SMART TRACKING (Battery Saver)
+  const startSmartTracking = async (userData: any) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
-    await Location.watchPositionAsync(
-      { accuracy: Location.Accuracy.High, distanceInterval: 5 },
-      (newLocation) => {
-        setLocation(newLocation);
-        checkProximity(newLocation.coords.latitude, newLocation.coords.longitude);
-      }
-    );
+    // Function to check time and decide whether to pull GPS
+    const checkTimeAndTrack = async () => {
+        const currentHour = new Date().getHours();
+        const { active_start_hour, active_end_hour } = userData;
+
+        // Check if current time is within user's active window
+        // (Handling simpler case where start < end. If start > end (overnight), logic needs slight tweak)
+        const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
+
+        if (isActiveTime) {
+            setIsTracking(true);
+            // Get single accurate location to save battery vs continuous watch
+            let loc = await Location.getCurrentPositionAsync({});
+            setLocation(loc);
+            checkProximity(loc.coords.latitude, loc.coords.longitude, userData.username);
+        } else {
+            setIsTracking(false);
+            console.log("Sleeping... outside active hours.");
+        }
+    };
+
+    // Run immediately
+    checkTimeAndTrack();
+    
+    // Then run every 30 seconds
+    const intervalId = setInterval(checkTimeAndTrack, 30000); 
+    return () => clearInterval(intervalId);
   };
 
-  const checkProximity = async (lat: number, lon: number) => {
+  const checkProximity = async (lat: number, lon: number, userId: string) => {
     const now = Date.now();
+    // 2-minute cooldown between alerts
     if (now - lastNotificationTime.current < 120000) return;
 
     try {
       const response = await fetch(`${API_BASE}/check-proximity`, {
         method: 'POST',
         headers: API_HEADERS,
-        body: JSON.stringify({ latitude: lat, longitude: lon }),
+        body: JSON.stringify({ 
+            latitude: lat, 
+            longitude: lon,
+            user_id: userId 
+        }),
       });
       const data = await response.json();
       
@@ -76,17 +129,18 @@ export default function HomeScreen() {
         
         await Notifications.scheduleNotificationAsync({
           content: {
-            title: `🎯 Found ${item.item}!`,
-            body: `At ${bestDeal.store} (${bestDeal.distance}m) - ${item.price}₪`,
+            title: `🎯 Near ${bestDeal.store}!`,
+            body: `Don't forget: ${item.item} (${item.price}₪)`,
             data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
           },
           trigger: null,
         });
         lastNotificationTime.current = now;
       }
-    } catch (e) { console.log("Proximity silent error", e); }
+    } catch (e) { console.log("Proximity error", e); }
   };
 
+  // 3. UI ACTIONS
   const openItemMenu = async (itemTitle: string) => {
     if (!location) {
       alert("Locating you...");
@@ -122,43 +176,62 @@ export default function HomeScreen() {
     if (url) Linking.openURL(url);
   };
 
-  const fetchTasks = async () => {
-    const res = await fetch(`${API_BASE}/tasks`, { headers: API_HEADERS });
-    if (res.ok) setTasks(await res.json());
+  // 4. CRUD OPERATIONS
+  const fetchTasks = async (username: string) => {
+    if (!username) return;
+    try {
+        const res = await fetch(`${API_BASE}/tasks/${username}`, { headers: API_HEADERS });
+        if (res.ok) setTasks(await res.json());
+    } catch(e) { console.log(e); }
   };
 
   const addTask = async () => {
-    if (!text) return;
+    if (!text || !user) return;
     
-    // 1. הוספת המשימה לשרת
     await fetch(`${API_BASE}/tasks`, {
       method: 'POST',
       headers: API_HEADERS,
-      body: JSON.stringify({ title: text, category, is_completed: false }),
+      body: JSON.stringify({ 
+          title: text, 
+          category, 
+          is_completed: false,
+          user_id: user.username
+      }),
     });
     
     setText('');
-    fetchTasks();
+    fetchTasks(user.username);
 
-    // 2. תיקון: בדיקה מיידית האם אני *כבר* ליד חנות עם הפריט הזה
+    // Instant check
     if (location) {
-      console.log("Checking proximity for new item...");
-      // אופציונלי: איפוס הטיימר כדי להבטיח שההתראה תקפוץ גם אם קיבלת אחת לפני דקה
-      lastNotificationTime.current = 0; 
-      checkProximity(location.coords.latitude, location.coords.longitude);
+        checkProximity(location.coords.latitude, location.coords.longitude, user.username);
     }
   };
 
   const deleteTask = async (id: string) => {
+    // Smooth Animation
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    
     await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE', headers: API_HEADERS });
-    fetchTasks();
+    fetchTasks(user.username);
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.contentContainer}>
-        <Text style={styles.header}>My List</Text>
-        <Text style={styles.subHeader}>Tap an item to see the map 🗺️</Text>
+        
+        {/* Header with Logout */}
+        <View style={styles.headerRow}>
+            <Text style={styles.header}>My List</Text>
+            <TouchableOpacity onPress={logout}>
+                <Text style={{color:'blue', fontWeight:'600'}}>Logout</Text>
+            </TouchableOpacity>
+        </View>
+        
+        {/* Status Indicator */}
+        <Text style={styles.subHeader}>
+            {isTracking ? "🟢 Active & Searching" : "🌙 Sleeping (Outside Active Hours)"}
+        </Text>
 
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={styles.inputWrapper}>
@@ -183,7 +256,7 @@ export default function HomeScreen() {
           )}
         />
 
-        {/* --- MAP MODAL --- */}
+        {/* --- MAP MODAL (Full Implementation) --- */}
         <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
@@ -205,7 +278,6 @@ export default function HomeScreen() {
                     longitudeDelta: 0.05,
                   }}
                 >
-                  {/* PINS FOR STORES */}
                   {itemDeals.map((deal, index) => (
                     <Marker
                       key={index}
@@ -251,8 +323,9 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F5' },
   contentContainer: { flex: 1, padding: 20 },
-  header: { fontSize: 32, fontWeight: '800', marginTop: 20, color: '#333' },
-  subHeader: { color: '#666', marginBottom: 20 },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
+  header: { fontSize: 32, fontWeight: '800', color: '#333' },
+  subHeader: { color: '#666', marginBottom: 20, marginTop: 5 },
   inputWrapper: { flexDirection: 'row', gap: 10, marginBottom: 15 },
   input: { flex: 1, backgroundColor: 'white', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#ddd' },
   taskItem: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 2 },
@@ -264,7 +337,6 @@ const styles = StyleSheet.create({
   modalHeader: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'white', zIndex: 1 },
   modalTitle: { fontSize: 20, fontWeight: 'bold' },
   
-  // NEW MAP STYLES
   mapContainer: { height: 300, width: '100%', marginBottom: 10 },
   map: { width: '100%', height: '100%' },
 
