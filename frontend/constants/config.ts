@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 // ⚙️ SERVER CONFIGURATION
 // ---------------------------------------------------------
 
-// REPLACE THIS with your actual Render URL (e.g., https://nexttoyou-backend.onrender.com)
+// switch between for local aand onrender server
 const LIVE_SERVER_URL = 'https://nexttoyou.onrender.com'; 
 
 const LOCAL_SERVER_URL = 'http://localhost:8000';

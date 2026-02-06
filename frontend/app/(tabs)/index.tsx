@@ -46,11 +46,18 @@ export default function HomeScreen() {
   const [itemDeals, setItemDeals] = useState<any[]>([]);
   
   const lastNotificationTime = useRef<number>(0);
-
+  
   useEffect(() => {
     checkLogin();
+    setupNotifications(); // <--- ADD THIS CALL
   }, []);
 
+  const setupNotifications = async () => {
+    const { status } = await Notifications.requestPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission missing', 'Enable notifications to get proximity alerts!');
+    }
+  };
   // 1. AUTH CHECK
   const checkLogin = async () => {
     const session = await AsyncStorage.getItem('user_session');
@@ -204,10 +211,12 @@ export default function HomeScreen() {
 
     // Instant check
     if (location) {
+        console.log("Checking proximity for new item...");
+        lastNotificationTime.current = 0; // <--- FORCE RESET COOLDOWN
         checkProximity(location.coords.latitude, location.coords.longitude, user.username);
     }
   };
-
+  
   const deleteTask = async (id: string) => {
     // Smooth Animation
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
