@@ -1,12 +1,39 @@
 # This file serves as our "Mock Database"
-# In a real app, this data would come from PostgreSQL or MongoDB
 
 STORES_DB = [
-    # --- SUPERMARKETS ---
+    # --- YOUR NEW LOCATIONS (TESTING) ---
+    {
+        "name": "Herzliya Hills Market",  # המיקום הראשון ששלחת (הרצליה)
+        "category": "Supermarket",
+        "lat": 32.167145928095465, 
+        "lon": 34.80468192486658,
+        "inventory": {
+            "milk": 5.50,   # מחיר זול לבדיקה
+            "bread": 7.00,
+            "water": 4.00,
+            "coffee": 15.00,
+            "apple": 8.00
+        }
+    },
+    {
+        "name": "Dizengoff Center Shop",  # המיקום השני ששלחת (תל אביב)
+        "category": "General Store",
+        "lat": 32.07788036071752, 
+        "lon": 34.77397435278002,
+        "inventory": {
+            "milk": 7.20,   # מחיר יקר יותר
+            "batteries": 20.00,
+            "notebook": 12.00,
+            "charger": 45.00,
+            "cola": 9.00
+        }
+    },
+
+    # --- EXISTING STORES (From before) ---
     {
         "name": "Super Yuda",
         "category": "Supermarket",
-        "lat": 32.0850, "lon": 34.7810, # Near Tel Aviv Center
+        "lat": 32.0850, "lon": 34.7810,
         "inventory": {
             "milk": 6.90,
             "bread": 8.50,
@@ -20,7 +47,7 @@ STORES_DB = [
         "category": "Supermarket",
         "lat": 32.0880, "lon": 34.7830, 
         "inventory": {
-            "milk": 8.50, # Expensive!
+            "milk": 8.50,
             "bread": 9.90,
             "eggs": 16.90,
             "cola": 8.00,
@@ -32,15 +59,13 @@ STORES_DB = [
         "category": "Supermarket",
         "lat": 32.0830, "lon": 34.7800,
         "inventory": {
-            "milk": 5.90, # Cheap!
+            "milk": 5.90,
             "bread": 6.50,
             "eggs": 11.90,
             "chicken": 35.00,
             "rice": 7.90
         }
     },
-
-    # --- PHARMACIES ---
     {
         "name": "Super-Pharm",
         "category": "Pharmacy",
@@ -54,19 +79,6 @@ STORES_DB = [
         }
     },
     {
-        "name": "Be Pharmacy",
-        "category": "Pharmacy",
-        "lat": 32.0875, "lon": 34.7840,
-        "inventory": {
-            "advil": 32.00,
-            "shampoo": 19.90,
-            "toothpaste": 12.00,
-            "facemask": 10.00
-        }
-    },
-
-    # --- HARDWARE ---
-    {
         "name": "Tambour Hardware",
         "category": "Hardware",
         "lat": 32.0855, "lon": 34.7815,
@@ -76,17 +88,6 @@ STORES_DB = [
             "screws": 15.00,
             "drill": 250.00,
             "lightbulb": 12.00
-        }
-    },
-    {
-        "name": "Ace Hardware",
-        "category": "Hardware",
-        "lat": 32.0820, "lon": 34.7790,
-        "inventory": {
-            "hammer": 39.00,
-            "paint": 90.00,
-            "ladder": 150.00,
-            "glue": 20.00
         }
     }
 ]
