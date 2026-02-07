@@ -46,10 +46,10 @@ export default function HomeScreen() {
   const [itemDeals, setItemDeals] = useState<any[]>([]);
   
   const lastNotificationTime = useRef<number>(0);
-  
+
   useEffect(() => {
     checkLogin();
-    setupNotifications(); // <--- ADD THIS CALL
+    setupNotifications();
   }, []);
 
   const setupNotifications = async () => {
@@ -58,18 +58,16 @@ export default function HomeScreen() {
       Alert.alert('Permission missing', 'Enable notifications to get proximity alerts!');
     }
   };
+
   // 1. AUTH CHECK
   const checkLogin = async () => {
     const session = await AsyncStorage.getItem('user_session');
     if (!session) {
-      // Redirect to login if no session found
       router.replace('/login'); 
       return;
     }
     const userData = JSON.parse(session);
     setUser(userData);
-    
-    // Load data for this user
     fetchTasks(userData.username);
     startSmartTracking(userData);
   };
@@ -79,23 +77,48 @@ export default function HomeScreen() {
     router.replace('/login');
   };
 
-  // 2. SMART TRACKING (Battery Saver)
+  const deleteAccount = async () => {
+    Alert.alert(
+      "Delete Account",
+      "Are you sure? This cannot be undone.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive", 
+          onPress: async () => {
+            if (!user) return;
+            try {
+              const res = await fetch(`${API_BASE}/delete-account`, {
+                method: 'POST',
+                headers: API_HEADERS,
+                body: JSON.stringify({ username: user.username, password: user.password })
+              });
+              if (res.ok) {
+                await AsyncStorage.removeItem('user_session');
+                router.replace('/login');
+              } else {
+                alert("Failed to delete account");
+              }
+            } catch (e) { alert("Network error"); }
+          }
+        }
+      ]
+    );
+  };
+
+  // 2. SMART TRACKING
   const startSmartTracking = async (userData: any) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
-    // Function to check time and decide whether to pull GPS
     const checkTimeAndTrack = async () => {
         const currentHour = new Date().getHours();
         const { active_start_hour, active_end_hour } = userData;
-
-        // Check if current time is within user's active window
-        // (Handling simpler case where start < end. If start > end (overnight), logic needs slight tweak)
         const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
 
         if (isActiveTime) {
             setIsTracking(true);
-            // Get single accurate location to save battery vs continuous watch
             let loc = await Location.getCurrentPositionAsync({});
             setLocation(loc);
             checkProximity(loc.coords.latitude, loc.coords.longitude, userData.username);
@@ -105,17 +128,13 @@ export default function HomeScreen() {
         }
     };
 
-    // Run immediately
     checkTimeAndTrack();
-    
-    // Then run every 30 seconds
     const intervalId = setInterval(checkTimeAndTrack, 30000); 
     return () => clearInterval(intervalId);
   };
 
   const checkProximity = async (lat: number, lon: number, userId: string) => {
     const now = Date.now();
-    // 2-minute cooldown between alerts
     if (now - lastNotificationTime.current < 120000) return;
 
     try {
@@ -147,7 +166,7 @@ export default function HomeScreen() {
     } catch (e) { console.log("Proximity error", e); }
   };
 
-  // 3. UI ACTIONS
+  // 3. UI ACTIONS (Map & Search)
   const openItemMenu = async (itemTitle: string) => {
     if (!location) {
       alert("Locating you...");
@@ -183,7 +202,6 @@ export default function HomeScreen() {
     if (url) Linking.openURL(url);
   };
 
-  // 4. CRUD OPERATIONS
   const fetchTasks = async (username: string) => {
     if (!username) return;
     try {
@@ -195,7 +213,6 @@ export default function HomeScreen() {
   const addTask = async () => {
     if (!text || !user) return;
     
-    // 1. Save the task to the server
     await fetch(`${API_BASE}/tasks`, {
       method: 'POST',
       headers: API_HEADERS,
@@ -207,16 +224,13 @@ export default function HomeScreen() {
       }),
     });
     
-    const newItem = text; // Remember what we just added
+    const newItem = text;
     setText('');
     fetchTasks(user.username);
 
-    // 2. INSTANT CHECK (Specific to the NEW item only)
     if (location) {
         console.log(`Checking deals specifically for: ${newItem}`);
-        
         try {
-            // Ask the server: "Is THIS item near me right now?"
             const res = await fetch(`${API_BASE}/search-item`, {
                 method: 'POST',
                 headers: API_HEADERS,
@@ -226,17 +240,14 @@ export default function HomeScreen() {
                     item_name: newItem 
                 }),
             });
-            
             const data = await res.json();
-            
-            // If we found a deal for THIS item, notify immediately
             if (data.results && data.results.length > 0) {
                 const bestDeal = data.results[0];
                 const item = bestDeal.found_items[0];
 
                 await Notifications.scheduleNotificationAsync({
                     content: {
-                        title: `🎯 Found ${item.item}!`, // "Found Water!"
+                        title: `🎯 Found ${item.item}!`,
                         body: `At ${bestDeal.store} (${bestDeal.distance}m) - ${item.price}₪`,
                         data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
                     },
@@ -248,9 +259,7 @@ export default function HomeScreen() {
   };
 
   const deleteTask = async (id: string) => {
-    // Smooth Animation
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    
     await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE', headers: API_HEADERS });
     fetchTasks(user.username);
   };
@@ -259,15 +268,19 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.contentContainer}>
         
-        {/* Header with Logout */}
+        {/* Header with Logout AND Delete */}
         <View style={styles.headerRow}>
             <Text style={styles.header}>My List</Text>
-            <TouchableOpacity onPress={logout}>
-                <Text style={{color:'blue', fontWeight:'600'}}>Logout</Text>
-            </TouchableOpacity>
+            <View style={{flexDirection: 'row', gap: 15}}>
+              <TouchableOpacity onPress={logout}>
+                  <Text style={{color:'blue', fontWeight:'600'}}>Logout</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={deleteAccount}>
+                  <Text style={{color:'red', fontWeight:'600'}}>Delete</Text>
+              </TouchableOpacity>
+            </View>
         </View>
         
-        {/* Status Indicator */}
         <Text style={styles.subHeader}>
             {isTracking ? "🟢 Active & Searching" : "🌙 Sleeping (Outside Active Hours)"}
         </Text>
@@ -295,7 +308,7 @@ export default function HomeScreen() {
           )}
         />
 
-        {/* --- MAP MODAL (Full Implementation) --- */}
+        {/* --- MAP MODAL --- */}
         <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
           <View style={styles.modalContainer}>
             <View style={styles.modalHeader}>
@@ -313,8 +326,8 @@ export default function HomeScreen() {
                   initialRegion={{
                     latitude: location.coords.latitude,
                     longitude: location.coords.longitude,
-                    latitudeDelta: 0.05,
-                    longitudeDelta: 0.05,
+                    latitudeDelta: 0.1, // Zoomed out a bit to see more
+                    longitudeDelta: 0.1,
                   }}
                 >
                   {itemDeals.map((deal, index) => (

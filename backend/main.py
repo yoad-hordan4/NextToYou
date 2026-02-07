@@ -4,9 +4,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict
 from uuid import uuid4
-from pydantic import BaseModel # Ensure this is imported
+from pydantic import BaseModel 
 
-# Import models and logic
 from models import TaskItem, LocationUpdate, User, LoginRequest
 from store_logic import find_nearby_deals
 
@@ -38,11 +37,14 @@ def save_data(filename, data):
 users_db = load_data(USERS_FILE, {}) 
 tasks_db = load_data(TASKS_FILE, []) 
 
-# --- NEW MODEL FOR SEARCH (Add this!) ---
 class ItemSearch(BaseModel):
     latitude: float
     longitude: float
     item_name: str
+
+class DeleteRequest(BaseModel):
+    username: str
+    password: str
 
 @app.get("/")
 def read_root():
@@ -65,6 +67,27 @@ def login(req: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"message": "Login successful", "user": user}
 
+# --- NEW: DELETE ACCOUNT ---
+@app.post("/delete-account")
+def delete_account(req: DeleteRequest):
+    if req.username not in users_db:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Check password for security
+    if users_db[req.username]["password"] != req.password:
+        raise HTTPException(status_code=401, detail="Wrong password")
+
+    # 1. Delete the user
+    del users_db[req.username]
+    save_data(USERS_FILE, users_db)
+
+    # 2. Delete all their tasks
+    global tasks_db
+    tasks_db = [t for t in tasks_db if t.get('user_id') != req.username]
+    save_data(TASKS_FILE, tasks_db)
+
+    return {"message": "Account deleted"}
+
 # --- TASK ENDPOINTS ---
 @app.get("/tasks/{user_id}")
 def get_tasks(user_id: str):
@@ -84,10 +107,11 @@ def delete_task(task_id: str):
     save_data(TASKS_FILE, tasks_db)
     return {"status": "deleted"}
 
-# --- PROXIMITY ---
+# --- PROXIMITY (Small Radius - For Push Notifications) ---
 @app.post("/check-proximity")
 def check_proximity(loc: LocationUpdate):
     user = users_db.get(loc.user_id)
+    # Use User's preferred radius (usually small, e.g., 50m)
     radius = user['notification_radius'] if user else 50
 
     user_tasks = [t['title'] for t in tasks_db if t.get('user_id') == loc.user_id and not t['is_completed']]
@@ -98,8 +122,9 @@ def check_proximity(loc: LocationUpdate):
     deals = find_nearby_deals(loc.latitude, loc.longitude, user_tasks, radius=radius)
     return {"nearby": deals}
 
+# --- MAP SEARCH (Huge Radius - For Planning) ---
 @app.post("/search-item")
 def search_item(search: ItemSearch):
-    # This is what the map calls to get pins
-    deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name])
+    # SEARCH RADIUS: 20,000 meters (20km) so you see EVERYTHING in the city
+    deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name], radius=20000)
     return {"results": deals}
