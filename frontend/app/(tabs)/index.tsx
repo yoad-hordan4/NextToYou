@@ -195,6 +195,7 @@ export default function HomeScreen() {
   const addTask = async () => {
     if (!text || !user) return;
     
+    // 1. Save the task to the server
     await fetch(`${API_BASE}/tasks`, {
       method: 'POST',
       headers: API_HEADERS,
@@ -206,17 +207,46 @@ export default function HomeScreen() {
       }),
     });
     
+    const newItem = text; // Remember what we just added
     setText('');
     fetchTasks(user.username);
 
-    // Instant check
+    // 2. INSTANT CHECK (Specific to the NEW item only)
     if (location) {
-        console.log("Checking proximity for new item...");
-        lastNotificationTime.current = 0; // <--- FORCE RESET COOLDOWN
-        checkProximity(location.coords.latitude, location.coords.longitude, user.username);
+        console.log(`Checking deals specifically for: ${newItem}`);
+        
+        try {
+            // Ask the server: "Is THIS item near me right now?"
+            const res = await fetch(`${API_BASE}/search-item`, {
+                method: 'POST',
+                headers: API_HEADERS,
+                body: JSON.stringify({ 
+                    latitude: location.coords.latitude, 
+                    longitude: location.coords.longitude,
+                    item_name: newItem 
+                }),
+            });
+            
+            const data = await res.json();
+            
+            // If we found a deal for THIS item, notify immediately
+            if (data.results && data.results.length > 0) {
+                const bestDeal = data.results[0];
+                const item = bestDeal.found_items[0];
+
+                await Notifications.scheduleNotificationAsync({
+                    content: {
+                        title: `🎯 Found ${item.item}!`, // "Found Water!"
+                        body: `At ${bestDeal.store} (${bestDeal.distance}m) - ${item.price}₪`,
+                        data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
+                    },
+                    trigger: null,
+                });
+            }
+        } catch (e) { console.log("Instant check failed", e); }
     }
   };
-  
+
   const deleteTask = async (id: string) => {
     // Smooth Animation
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
