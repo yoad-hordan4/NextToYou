@@ -4,7 +4,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict
 from uuid import uuid4
+from pydantic import BaseModel # Ensure this is imported
 
+# Import models and logic
 from models import TaskItem, LocationUpdate, User, LoginRequest
 from store_logic import find_nearby_deals
 
@@ -33,8 +35,14 @@ def save_data(filename, data):
         json.dump(data, f, indent=4)
 
 # Load DBs on startup
-users_db = load_data(USERS_FILE, {}) # Dict: {username: UserObj}
-tasks_db = load_data(TASKS_FILE, []) # List of TaskItem dicts
+users_db = load_data(USERS_FILE, {}) 
+tasks_db = load_data(TASKS_FILE, []) 
+
+# --- NEW MODEL FOR SEARCH (Add this!) ---
+class ItemSearch(BaseModel):
+    latitude: float
+    longitude: float
+    item_name: str
 
 @app.get("/")
 def read_root():
@@ -57,10 +65,9 @@ def login(req: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"message": "Login successful", "user": user}
 
-# --- TASK ENDPOINTS (User Specific) ---
+# --- TASK ENDPOINTS ---
 @app.get("/tasks/{user_id}")
 def get_tasks(user_id: str):
-    # Filter tasks for this specific user
     return [t for t in tasks_db if t.get('user_id') == user_id]
 
 @app.post("/tasks")
@@ -80,16 +87,19 @@ def delete_task(task_id: str):
 # --- PROXIMITY ---
 @app.post("/check-proximity")
 def check_proximity(loc: LocationUpdate):
-    # 1. Get user settings for radius
     user = users_db.get(loc.user_id)
     radius = user['notification_radius'] if user else 50
 
-    # 2. Get user's tasks
     user_tasks = [t['title'] for t in tasks_db if t.get('user_id') == loc.user_id and not t['is_completed']]
     
     if not user_tasks:
         return {"message": "No active tasks."}
 
-    # 3. Find deals using User's custom radius
     deals = find_nearby_deals(loc.latitude, loc.longitude, user_tasks, radius=radius)
     return {"nearby": deals}
+
+@app.post("/search-item")
+def search_item(search: ItemSearch):
+    # This is what the map calls to get pins
+    deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name])
+    return {"results": deals}
