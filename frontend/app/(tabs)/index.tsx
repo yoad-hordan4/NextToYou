@@ -52,8 +52,19 @@ export default function HomeScreen() {
   useEffect(() => {
     checkLogin();
     setupNotifications();
-  }, []);
 
+    // --- LISTENER FOR TAPPING NOTIFICATIONS ---
+    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+      // FIX: We tell TypeScript that 'data' is an object containing a 'url' string
+      const data = response.notification.request.content.data as { url?: string };
+      
+      if (data?.url) {
+        Linking.openURL(data.url); // Opens Maps
+      }
+    });
+
+    return () => subscription.remove();
+  }, []);
   const setupNotifications = async () => {
     const { status } = await Notifications.requestPermissionsAsync();
     if (status !== 'granted') {
@@ -282,13 +293,9 @@ export default function HomeScreen() {
             });
             const data = await res.json();
             
-            // For manual adds, we usually want to notify immediately even if we are already there
-            // because the user *just* asked for it.
+            // For manual adds, notify if reasonably close
             if (data.results && data.results.length > 0) {
-                // Filter to find very close ones (notification radius) or just show best
                 const bestDeal = data.results[0];
-                // Only notify if it's actually close (e.g. < 200m)? 
-                // For now, let's assume search-item returns 20km radius, so maybe only notify if < 500m
                 if (bestDeal.distance < 500) {
                     const item = bestDeal.found_items[0];
                     await Notifications.scheduleNotificationAsync({
