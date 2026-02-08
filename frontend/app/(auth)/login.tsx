@@ -19,8 +19,7 @@ export default function LoginScreen() {
       const data = await res.json();
       if (res.ok) {
         await AsyncStorage.setItem('user_session', JSON.stringify(data.user));
-        // Use replace to prevent going back to login
-        router.replace('/(tabs)'); 
+        router.replace('/'); 
       } else {
         Alert.alert("Login Failed", data.detail);
       }
@@ -33,9 +32,9 @@ export default function LoginScreen() {
       style={styles.container}
     >
       <View style={styles.innerContainer}>
-        {/* LOGO AREA */}
+        {/* LOGO AREA - UPDATED */}
         <Image 
-          source={require('@/assets/images/react-logo.png')} 
+          source={require('@/assets/images/icon.png')} 
           style={styles.logo} 
           resizeMode="contain"
         />
@@ -82,7 +81,7 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: { 
     flex: 1, 
-    backgroundColor: '#FFFFFF' // Force white background
+    backgroundColor: '#FFFFFF' 
   },
   innerContainer: {
     flex: 1,
@@ -90,11 +89,11 @@ const styles = StyleSheet.create({
     padding: 30,
   },
   logo: {
-    width: 80,
-    height: 80,
+    width: 100, // Slightly bigger
+    height: 100,
     alignSelf: 'center',
     marginBottom: 20,
-    tintColor: '#007AFF' // Optional: tints the logo blue
+    borderRadius: 20 // Nice rounded corners for app icon
   },
   title: { 
     fontSize: 36, 
@@ -120,13 +119,13 @@ const styles = StyleSheet.create({
     marginBottom: 5
   },
   input: { 
-    backgroundColor: '#F5F5F5', // Light gray background for visibility
+    backgroundColor: '#F5F5F5', 
     padding: 16, 
     borderRadius: 12, 
     fontSize: 16,
     borderWidth: 1,
     borderColor: '#E0E0E0',
-    color: '#000' // Force black text
+    color: '#000' 
   },
   loginButton: {
     backgroundColor: '#007AFF',
