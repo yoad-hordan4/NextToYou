@@ -46,6 +46,10 @@ class DeleteRequest(BaseModel):
     username: str
     password: str
 
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
+
 @app.get("/")
 def read_root():
     return {"status": "NextToYou Server is Online"}
@@ -99,6 +103,20 @@ def create_task(task: TaskItem):
     tasks_db.append(task.dict())
     save_data(TASKS_FILE, tasks_db)
     return task
+# ... (inside backend/main.py)
+
+@app.put("/tasks/{task_id}")
+def update_task(task_id: str, update: TaskUpdate):
+    global tasks_db
+    for task in tasks_db:
+        if task['id'] == task_id:
+            if update.title:
+                task['title'] = update.title
+            if update.category:
+                task['category'] = update.category
+            save_data(TASKS_FILE, tasks_db)
+            return task
+    raise HTTPException(status_code=404, detail="Task not found")
 
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: str):

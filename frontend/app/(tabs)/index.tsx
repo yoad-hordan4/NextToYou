@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TextInput, Button, FlatList, TouchableOpacity, SafeAreaView, KeyboardAvoidingView, Alert, Platform, Modal, Linking, LayoutAnimation, UIManager } from 'react-native';
+import { StyleSheet, Text, View, TextInput, Button, FlatList, TouchableOpacity, SafeAreaView, KeyboardAvoidingView, Alert, Platform, Modal, Linking, LayoutAnimation, UIManager, ScrollView } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
@@ -23,6 +23,11 @@ Notifications.setNotificationHandler({
   }),
 });
 
+// --- CONSTANTS ---
+const CATEGORIES = [
+  "Supermarket", "Pharmacy", "Hardware", "Pet Shop", "Post Office", "Phone Repair", "General"
+];
+
 interface Task {
   id: string;
   title: string;
@@ -30,41 +35,46 @@ interface Task {
 }
 
 export default function HomeScreen() {
-  // User & Data State
+  // --- STATE ---
   const [user, setUser] = useState<any>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [text, setText] = useState('');
-  const [category, setCategory] = useState('Supermarket');
   
-  // Location & Tracking State
+  // Inputs
+  const [text, setText] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('Supermarket');
+  
+  // Edit Mode State
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+
+  // Location & Tracking
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [isTracking, setIsTracking] = useState(false);
   
-  // Modal & Map State
+  // Modal & Map
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const [itemDeals, setItemDeals] = useState<any[]>([]);
   
-  // --- SMART NOTIFICATION STATE ---
-  // Stores "StoreName|ItemName" strings of deals we are currently near.
+  // Smart Notifications Memory
   const notifiedDealsRef = useRef<Set<string>>(new Set());
 
+  // --- INITIALIZATION ---
   useEffect(() => {
     checkLogin();
     setupNotifications();
 
-    // --- LISTENER FOR TAPPING NOTIFICATIONS ---
+    // LISTENER: Handle tapping on notifications to open Maps
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      // FIX: We tell TypeScript that 'data' is an object containing a 'url' string
       const data = response.notification.request.content.data as { url?: string };
-      
       if (data?.url) {
-        Linking.openURL(data.url); // Opens Maps
+        Linking.openURL(data.url); 
       }
     });
 
     return () => subscription.remove();
   }, []);
+
   const setupNotifications = async () => {
     const { status } = await Notifications.requestPermissionsAsync();
     if (status !== 'granted') {
@@ -72,7 +82,7 @@ export default function HomeScreen() {
     }
   };
 
-  // 1. AUTH CHECK
+  // --- AUTH ---
   const checkLogin = async () => {
     const session = await AsyncStorage.getItem('user_session');
     if (!session) {
@@ -86,9 +96,7 @@ export default function HomeScreen() {
   };
 
   const logout = async () => {
-    // 1. Clear Session
     await AsyncStorage.removeItem('user_session');
-    // 2. Clear Notification Memory so next login starts fresh
     notifiedDealsRef.current.clear();
     router.replace('/login');
   };
@@ -123,24 +131,20 @@ export default function HomeScreen() {
     );
   };
 
-  // 2. SMART TRACKING (Battery Saver + Logout Check)
+  // --- SMART TRACKING & PROXIMITY ---
   const startSmartTracking = async (userData: any) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
     const checkTimeAndTrack = async () => {
-        // --- SECURITY CHECK: STOP IF LOGGED OUT ---
         const session = await AsyncStorage.getItem('user_session');
         if (!session) {
-            console.log("Tracking stopped: User logged out.");
             setIsTracking(false);
-            return; // Stop execution
+            return; 
         }
 
         const currentHour = new Date().getHours();
         const { active_start_hour, active_end_hour } = userData;
-        
-        // Simple logic for start < end. (If start=22, end=8, this needs adjustment)
         const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
 
         if (isActiveTime) {
@@ -150,19 +154,14 @@ export default function HomeScreen() {
             checkProximity(loc.coords.latitude, loc.coords.longitude, userData.username);
         } else {
             setIsTracking(false);
-            console.log("Sleeping... outside active hours.");
         }
     };
 
     checkTimeAndTrack();
-    // Check every 30 seconds
     const intervalId = setInterval(checkTimeAndTrack, 30000); 
-    
-    // Cleanup on unmount (or logout)
     return () => clearInterval(intervalId);
   };
 
-  // 3. PROXIMITY LOGIC (No Repeats)
   const checkProximity = async (lat: number, lon: number, userId: string) => {
     try {
       const response = await fetch(`${API_BASE}/check-proximity`, {
@@ -180,21 +179,17 @@ export default function HomeScreen() {
       const currentDealIds = new Set<string>();
       const newDealsToNotify = [];
 
-      // A. Identify what is near us RIGHT NOW
       for (const deal of currentDeals) {
         for (const foundItem of deal.found_items) {
-             // Unique ID: "SuperYuda|Milk"
              const uniqueId = `${deal.store}|${foundItem.item}`;
              currentDealIds.add(uniqueId);
 
-             // B. If we haven't notified about this yet, add to list
              if (!notifiedDealsRef.current.has(uniqueId)) {
                  newDealsToNotify.push({ store: deal, item: foundItem });
              }
         }
       }
 
-      // C. Notify ONLY for the new stuff
       for (const { store, item } of newDealsToNotify) {
           await Notifications.scheduleNotificationAsync({
               content: {
@@ -206,17 +201,105 @@ export default function HomeScreen() {
           });
       }
 
-      // D. Update Memory
-      // This implicitly handles the "Out of Radius" reset.
-      // - If you stay in radius: ID stays in the set.
-      // - If you leave radius: ID is NOT in `currentDealIds`, so it is removed from `notifiedDealsRef`.
-      // - If you come back later: It will be "new" again.
       notifiedDealsRef.current = currentDealIds;
 
     } catch (e) { console.log("Proximity error", e); }
   };
 
-  // 4. UI ACTIONS
+  // --- CRUD ACTIONS (Tasks) ---
+  const fetchTasks = async (username: string) => {
+    if (!username) return;
+    try {
+        const res = await fetch(`${API_BASE}/tasks/${username}`, { headers: API_HEADERS });
+        if (res.ok) setTasks(await res.json());
+    } catch(e) { console.log(e); }
+  };
+
+  const handleAddOrUpdate = async () => {
+    if (!text || !user) return;
+    
+    // 1. EDIT MODE
+    if (isEditing && editingTaskId) {
+      await fetch(`${API_BASE}/tasks/${editingTaskId}`, {
+        method: 'PUT',
+        headers: API_HEADERS,
+        body: JSON.stringify({ 
+            title: text, 
+            category: selectedCategory 
+        }),
+      });
+      // Reset Edit State
+      setIsEditing(false);
+      setEditingTaskId(null);
+
+    } else {
+      // 2. ADD MODE
+      await fetch(`${API_BASE}/tasks`, {
+        method: 'POST',
+        headers: API_HEADERS,
+        body: JSON.stringify({ 
+            title: text, 
+            category: selectedCategory, 
+            is_completed: false,
+            user_id: user.username
+        }),
+      });
+      
+      // Instant Check for new item
+      if (location) {
+          try {
+              const res = await fetch(`${API_BASE}/search-item`, {
+                  method: 'POST',
+                  headers: API_HEADERS,
+                  body: JSON.stringify({ 
+                      latitude: location.coords.latitude, 
+                      longitude: location.coords.longitude,
+                      item_name: text 
+                  }),
+              });
+              const data = await res.json();
+              if (data.results && data.results.length > 0) {
+                  const bestDeal = data.results[0];
+                  if (bestDeal.distance < 500) {
+                      const item = bestDeal.found_items[0];
+                      await Notifications.scheduleNotificationAsync({
+                          content: {
+                              title: `🎯 Found ${item.item}!`,
+                              body: `At ${bestDeal.store} (${bestDeal.distance}m) - ${item.price}₪`,
+                              data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
+                          },
+                          trigger: null,
+                      });
+                  }
+              }
+          } catch (e) { console.log("Instant check failed", e); }
+      }
+    }
+    
+    setText('');
+    fetchTasks(user.username);
+  };
+
+  const startEdit = (task: Task) => {
+    setText(task.title);
+    setSelectedCategory(task.category);
+    setIsEditing(true);
+    setEditingTaskId(task.id);
+  };
+
+  const cancelEdit = () => {
+    setText('');
+    setIsEditing(false);
+    setEditingTaskId(null);
+  };
+
+  const deleteTask = async (id: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE', headers: API_HEADERS });
+    fetchTasks(user.username);
+  };
+
+  // --- MAP & NAVIGATION ---
   const openItemMenu = async (itemTitle: string) => {
     if (!location) {
       alert("Locating you...");
@@ -252,72 +335,6 @@ export default function HomeScreen() {
     if (url) Linking.openURL(url);
   };
 
-  const fetchTasks = async (username: string) => {
-    if (!username) return;
-    try {
-        const res = await fetch(`${API_BASE}/tasks/${username}`, { headers: API_HEADERS });
-        if (res.ok) setTasks(await res.json());
-    } catch(e) { console.log(e); }
-  };
-
-  const addTask = async () => {
-    if (!text || !user) return;
-    
-    await fetch(`${API_BASE}/tasks`, {
-      method: 'POST',
-      headers: API_HEADERS,
-      body: JSON.stringify({ 
-          title: text, 
-          category, 
-          is_completed: false,
-          user_id: user.username
-      }),
-    });
-    
-    const newItem = text;
-    setText('');
-    fetchTasks(user.username);
-
-    // Instant check for the NEW item only
-    if (location) {
-        console.log(`Checking deals specifically for: ${newItem}`);
-        try {
-            const res = await fetch(`${API_BASE}/search-item`, {
-                method: 'POST',
-                headers: API_HEADERS,
-                body: JSON.stringify({ 
-                    latitude: location.coords.latitude, 
-                    longitude: location.coords.longitude,
-                    item_name: newItem 
-                }),
-            });
-            const data = await res.json();
-            
-            // For manual adds, notify if reasonably close
-            if (data.results && data.results.length > 0) {
-                const bestDeal = data.results[0];
-                if (bestDeal.distance < 500) {
-                    const item = bestDeal.found_items[0];
-                    await Notifications.scheduleNotificationAsync({
-                        content: {
-                            title: `🎯 Found ${item.item}!`,
-                            body: `At ${bestDeal.store} (${bestDeal.distance}m) - ${item.price}₪`,
-                            data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
-                        },
-                        trigger: null,
-                    });
-                }
-            }
-        } catch (e) { console.log("Instant check failed", e); }
-    }
-  };
-
-  const deleteTask = async (id: string) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE', headers: API_HEADERS });
-    fetchTasks(user.username);
-  };
-
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.contentContainer}>
@@ -339,26 +356,74 @@ export default function HomeScreen() {
             {isTracking ? "🟢 Active & Searching" : "🌙 Sleeping (Outside Active Hours)"}
         </Text>
 
+        {/* --- INPUT AREA (UPDATED FOR CATEGORIES) --- */}
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={styles.inputWrapper}>
-            <TextInput style={styles.input} placeholder="Add item..." value={text} onChangeText={setText} />
-            <Button title="Add" onPress={addTask} />
+          <View style={styles.inputCard}>
+            
+            {/* Category Chips */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom: 10}}>
+              {CATEGORIES.map(cat => (
+                <TouchableOpacity 
+                  key={cat} 
+                  onPress={() => setSelectedCategory(cat)}
+                  style={[
+                    styles.catChip, 
+                    selectedCategory === cat && styles.catChipActive
+                  ]}
+                >
+                  <Text style={[
+                    styles.catText, 
+                    selectedCategory === cat && styles.catTextActive
+                  ]}>
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            <View style={styles.inputWrapper}>
+              <TextInput 
+                style={styles.input} 
+                placeholder={isEditing ? "Edit item name..." : "Add item..."} 
+                value={text} 
+                onChangeText={setText} 
+              />
+              <Button 
+                title={isEditing ? "Save" : "Add"} 
+                onPress={handleAddOrUpdate} 
+              />
+              {isEditing && (
+                <Button title="Cancel" color="red" onPress={cancelEdit} />
+              )}
+            </View>
+
           </View>
         </KeyboardAvoidingView>
 
+        {/* --- LIST --- */}
         <FlatList
           data={tasks}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
-            <TouchableOpacity style={styles.taskItem} onPress={() => openItemMenu(item.title)}>
-              <View>
+            <View style={styles.taskItem}>
+              {/* Click to Open Map */}
+              <TouchableOpacity style={{flex: 1}} onPress={() => openItemMenu(item.title)}>
                 <Text style={styles.taskTitle}>{item.title}</Text>
                 <Text style={styles.taskCategory}>{item.category}</Text>
-              </View>
-              <TouchableOpacity onPress={() => deleteTask(item.id)}>
-                <Text style={styles.deleteText}>Done</Text>
               </TouchableOpacity>
-            </TouchableOpacity>
+              
+              <View style={styles.actions}>
+                {/* Edit Button */}
+                <TouchableOpacity onPress={() => startEdit(item)} style={styles.editBtn}>
+                    <Text style={{color: '#007AFF'}}>Edit</Text>
+                </TouchableOpacity>
+
+                {/* Delete Button */}
+                <TouchableOpacity onPress={() => deleteTask(item.id)}>
+                    <Text style={styles.deleteText}>Done</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           )}
         />
 
@@ -370,7 +435,6 @@ export default function HomeScreen() {
               <Button title="Close" onPress={() => setModalVisible(false)} />
             </View>
 
-            {/* MAP VIEW */}
             <View style={styles.mapContainer}>
                {location && (
                 <MapView
@@ -397,7 +461,6 @@ export default function HomeScreen() {
                )}
             </View>
 
-            {/* LIST BELOW MAP */}
             <FlatList
               data={itemDeals}
               style={{ flex: 1 }}
@@ -432,20 +495,34 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
   header: { fontSize: 32, fontWeight: '800', color: '#333' },
   subHeader: { color: '#666', marginBottom: 20, marginTop: 5 },
-  inputWrapper: { flexDirection: 'row', gap: 10, marginBottom: 15 },
-  input: { flex: 1, backgroundColor: 'white', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#ddd' },
+  
+  // Input Area (New)
+  inputCard: { backgroundColor: 'white', padding: 15, borderRadius: 15, marginBottom: 15, elevation: 3 },
+  inputWrapper: { flexDirection: 'row', gap: 10, alignItems: 'center' },
+  input: { flex: 1, backgroundColor: '#F9F9F9', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#eee' },
+  
+  // Category Chips (New)
+  catChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: '#eee', marginRight: 8 },
+  catChipActive: { backgroundColor: '#007AFF' },
+  catText: { color: '#666', fontSize: 12, fontWeight: '600' },
+  catTextActive: { color: 'white' },
+
+  // Task Item (Updated)
   taskItem: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 2 },
   taskTitle: { fontSize: 18, fontWeight: '600', color: '#333' },
-  taskCategory: { color: '#888', fontSize: 12 },
+  taskCategory: { color: '#888', fontSize: 12, marginTop: 2 },
+  
+  // Actions
+  actions: { flexDirection: 'row', gap: 15 },
+  editBtn: { marginRight: 5 },
   deleteText: { color: 'red', fontWeight: '600' },
   
+  // Map Modal
   modalContainer: { flex: 1, backgroundColor: '#fff' },
   modalHeader: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'white', zIndex: 1 },
   modalTitle: { fontSize: 20, fontWeight: 'bold' },
-  
   mapContainer: { height: 300, width: '100%', marginBottom: 10 },
   map: { width: '100%', height: '100%' },
-
   dealCard: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee', alignItems: 'center' },
   dealInfo: { flex: 1 },
   storeName: { fontSize: 18, fontWeight: '600' },
