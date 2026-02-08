@@ -1,9 +1,8 @@
 # This file serves as our "Mock Database"
 
 STORES_DB = [
-    # --- YOUR NEW LOCATIONS (TESTING) ---
     {
-        "name": "Herzliya Hills Market",  # המיקום הראשון ששלחת (הרצליה)
+        "name": "Herzliya Hills Market", 
         "category": "Supermarket",
         "lat": 32.167145928095465, 
         "lon": 34.80468192486658,
@@ -16,7 +15,7 @@ STORES_DB = [
         }
     },
     {
-        "name": "Dizengoff Center Shop",  # המיקום השני ששלחת (תל אביב)
+        "name": "Dizengoff Center Shop",
         "category": "General Store",
         "lat": 32.07788036071752, 
         "lon": 34.77397435278002,
