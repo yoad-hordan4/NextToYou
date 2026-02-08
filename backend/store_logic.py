@@ -18,45 +18,57 @@ def calculate_distance(lat1, lon1, lat2, lon2):
 
 def get_best_match_tfidf(user_query, inventory_names, threshold=0.2):
     """
-    Uses TF-IDF to find the best matching item in the inventory.
-    Returns the matching inventory name or None if no good match is found.
+    Finds the best match using Character N-Grams (Robust to typos and plurals).
     """
     if not inventory_names:
         return None
 
     try:
-        # 1. Create the corpus (Inventory + User Query) to ensure vocabulary matches
-        # We treat the user query as just another document for vectorization
+        # 1. Setup Corpus
         corpus = inventory_names + [user_query]
         
-        # 2. Vectorize
-        # ngram_range=(1, 2) allows matching phrases like "Peanut Butter" together
-        vectorizer = TfidfVectorizer(analyzer='word', ngram_range=(1, 2), min_df=1)
+        # 2. Vectorize using 'char_wb' (Character Whole-Word Boundary)
+        # This breaks words into chunks of 2-4 letters.
+        # "apple" -> "ap", "pp", "pl", "le", "app", "ppl"...
+        # This allows "apples" to match "apple" very highly.
+        vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 4), min_df=1)
         tfidf_matrix = vectorizer.fit_transform(corpus)
 
-        # 3. Calculate Cosine Similarity
-        # The user_query is the LAST item in the matrix
+        # 3. Compute Similarity
         query_vec = tfidf_matrix[-1]
         inventory_vecs = tfidf_matrix[:-1]
         
-        # Compute similarity between query and all inventory items
         similarity_scores = cosine_similarity(query_vec, inventory_vecs).flatten()
 
-        # 4. Find the best match
+        # 4. Find Best Match
         best_idx = np.argmax(similarity_scores)
         best_score = similarity_scores[best_idx]
 
-        # Debug print to help you see what's matching
-        # print(f"Query: '{user_query}' matched '{inventory_names[best_idx]}' with score: {best_score}")
+        # Debugging: See what it's thinking
+        # print(f"Query: '{user_query}' -> Match: '{inventory_names[best_idx]}' (Score: {best_score:.2f})")
 
         if best_score > threshold:
             return inventory_names[best_idx]
             
     except Exception as e:
         print(f"TF-IDF Error: {e}")
-        # Fallback to simple matching if ML fails
-        for name in inventory_names:
-            if user_query.lower() in name.lower():
+
+    # --- SMARTER FALLBACK ---
+    # If AI fails, use logic.
+    user_query_lower = user_query.lower()
+    
+    for name in inventory_names:
+        name_lower = name.lower()
+        
+        # 1. Exact substring (e.g., user "soy milk" -> match "milk")
+        if user_query_lower in name_lower:
+            return name
+            
+        # 2. Reverse substring (e.g., user "red apples" -> match "apple")
+        # We check if the store item is inside the user's longer search query
+        if name_lower in user_query_lower:
+            # Prevent tiny words matching (e.g. don't match "Tea" to "Steak")
+            if len(name) > 3: 
                 return name
                 
     return None
@@ -73,7 +85,6 @@ def find_nearby_deals(user_lat, user_lon, needed_items, radius=5000):
             store_inventory_names = list(store["inventory"].keys())
             
             for user_item in needed_items:
-                # --- NEW TF-IDF MATCHING LOGIC ---
                 match_name = get_best_match_tfidf(user_item, store_inventory_names)
                 
                 if match_name:

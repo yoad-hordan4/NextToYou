@@ -45,7 +45,9 @@ export default function HomeScreen() {
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const [itemDeals, setItemDeals] = useState<any[]>([]);
   
-  const lastNotificationTime = useRef<number>(0);
+  // --- SMART NOTIFICATION STATE ---
+  // Stores "StoreName|ItemName" strings of deals we are currently near.
+  const notifiedDealsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     checkLogin();
@@ -73,7 +75,10 @@ export default function HomeScreen() {
   };
 
   const logout = async () => {
+    // 1. Clear Session
     await AsyncStorage.removeItem('user_session');
+    // 2. Clear Notification Memory so next login starts fresh
+    notifiedDealsRef.current.clear();
     router.replace('/login');
   };
 
@@ -107,14 +112,24 @@ export default function HomeScreen() {
     );
   };
 
-  // 2. SMART TRACKING
+  // 2. SMART TRACKING (Battery Saver + Logout Check)
   const startSmartTracking = async (userData: any) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
     const checkTimeAndTrack = async () => {
+        // --- SECURITY CHECK: STOP IF LOGGED OUT ---
+        const session = await AsyncStorage.getItem('user_session');
+        if (!session) {
+            console.log("Tracking stopped: User logged out.");
+            setIsTracking(false);
+            return; // Stop execution
+        }
+
         const currentHour = new Date().getHours();
         const { active_start_hour, active_end_hour } = userData;
+        
+        // Simple logic for start < end. (If start=22, end=8, this needs adjustment)
         const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
 
         if (isActiveTime) {
@@ -129,14 +144,15 @@ export default function HomeScreen() {
     };
 
     checkTimeAndTrack();
+    // Check every 30 seconds
     const intervalId = setInterval(checkTimeAndTrack, 30000); 
+    
+    // Cleanup on unmount (or logout)
     return () => clearInterval(intervalId);
   };
 
+  // 3. PROXIMITY LOGIC (No Repeats)
   const checkProximity = async (lat: number, lon: number, userId: string) => {
-    const now = Date.now();
-    if (now - lastNotificationTime.current < 120000) return;
-
     try {
       const response = await fetch(`${API_BASE}/check-proximity`, {
         method: 'POST',
@@ -149,24 +165,47 @@ export default function HomeScreen() {
       });
       const data = await response.json();
       
-      if (data.nearby && data.nearby.length > 0) {
-        const bestDeal = data.nearby[0];
-        const item = bestDeal.found_items[0];
-        
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: `🎯 Near ${bestDeal.store}!`,
-            body: `Don't forget: ${item.item} (${item.price}₪)`,
-            data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
-          },
-          trigger: null,
-        });
-        lastNotificationTime.current = now;
+      const currentDeals = data.nearby || [];
+      const currentDealIds = new Set<string>();
+      const newDealsToNotify = [];
+
+      // A. Identify what is near us RIGHT NOW
+      for (const deal of currentDeals) {
+        for (const foundItem of deal.found_items) {
+             // Unique ID: "SuperYuda|Milk"
+             const uniqueId = `${deal.store}|${foundItem.item}`;
+             currentDealIds.add(uniqueId);
+
+             // B. If we haven't notified about this yet, add to list
+             if (!notifiedDealsRef.current.has(uniqueId)) {
+                 newDealsToNotify.push({ store: deal, item: foundItem });
+             }
+        }
       }
+
+      // C. Notify ONLY for the new stuff
+      for (const { store, item } of newDealsToNotify) {
+          await Notifications.scheduleNotificationAsync({
+              content: {
+                  title: `🎯 Near ${store.store}!`,
+                  body: `Found: ${item.item} (${item.price}₪)`,
+                  data: { url: `maps://0,0?q=${store.lat},${store.lon}(${store.store})` },
+              },
+              trigger: null,
+          });
+      }
+
+      // D. Update Memory
+      // This implicitly handles the "Out of Radius" reset.
+      // - If you stay in radius: ID stays in the set.
+      // - If you leave radius: ID is NOT in `currentDealIds`, so it is removed from `notifiedDealsRef`.
+      // - If you come back later: It will be "new" again.
+      notifiedDealsRef.current = currentDealIds;
+
     } catch (e) { console.log("Proximity error", e); }
   };
 
-  // 3. UI ACTIONS (Map & Search)
+  // 4. UI ACTIONS
   const openItemMenu = async (itemTitle: string) => {
     if (!location) {
       alert("Locating you...");
@@ -228,6 +267,7 @@ export default function HomeScreen() {
     setText('');
     fetchTasks(user.username);
 
+    // Instant check for the NEW item only
     if (location) {
         console.log(`Checking deals specifically for: ${newItem}`);
         try {
@@ -241,18 +281,25 @@ export default function HomeScreen() {
                 }),
             });
             const data = await res.json();
+            
+            // For manual adds, we usually want to notify immediately even if we are already there
+            // because the user *just* asked for it.
             if (data.results && data.results.length > 0) {
+                // Filter to find very close ones (notification radius) or just show best
                 const bestDeal = data.results[0];
-                const item = bestDeal.found_items[0];
-
-                await Notifications.scheduleNotificationAsync({
-                    content: {
-                        title: `🎯 Found ${item.item}!`,
-                        body: `At ${bestDeal.store} (${bestDeal.distance}m) - ${item.price}₪`,
-                        data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
-                    },
-                    trigger: null,
-                });
+                // Only notify if it's actually close (e.g. < 200m)? 
+                // For now, let's assume search-item returns 20km radius, so maybe only notify if < 500m
+                if (bestDeal.distance < 500) {
+                    const item = bestDeal.found_items[0];
+                    await Notifications.scheduleNotificationAsync({
+                        content: {
+                            title: `🎯 Found ${item.item}!`,
+                            body: `At ${bestDeal.store} (${bestDeal.distance}m) - ${item.price}₪`,
+                            data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
+                        },
+                        trigger: null,
+                    });
+                }
             }
         } catch (e) { console.log("Instant check failed", e); }
     }
@@ -268,7 +315,7 @@ export default function HomeScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.contentContainer}>
         
-        {/* Header with Logout AND Delete */}
+        {/* Header */}
         <View style={styles.headerRow}>
             <Text style={styles.header}>My List</Text>
             <View style={{flexDirection: 'row', gap: 15}}>
@@ -326,7 +373,7 @@ export default function HomeScreen() {
                   initialRegion={{
                     latitude: location.coords.latitude,
                     longitude: location.coords.longitude,
-                    latitudeDelta: 0.1, // Zoomed out a bit to see more
+                    latitudeDelta: 0.1, 
                     longitudeDelta: 0.1,
                   }}
                 >
