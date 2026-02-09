@@ -34,7 +34,7 @@ export default function LoginScreen() {
       <View style={styles.innerContainer}>
         {/* LOGO AREA - UPDATED */}
         <Image 
-          source={require('@/assets/images/nextomeLogo.png')} 
+          source={require('@/assets/images/nextoyou.png')} 
           style={styles.logo} 
           resizeMode="contain"
         />

@@ -27,7 +27,7 @@ app.add_middleware(
 
 # 2. CONNECT TO MONGODB
 # If no env var is found, it will try strictly local, but you should set the MONGO_URI
-MONGO_URI = os.getenv("MONGO_URL") 
+MONGO_URI = os.getenv("MONGO_URI") 
 if not MONGO_URI:
     print("WARNING: MONGO_URI not set. Database features will fail.")
 
