@@ -1,13 +1,19 @@
-import json
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict
+from typing import List, Optional
 from uuid import uuid4
-from pydantic import BaseModel 
+from pydantic import BaseModel
 
-from models import TaskItem, LocationUpdate, User, LoginRequest
+# Database Imports
+from pymongo import MongoClient
+from dotenv import load_dotenv
+
+from models import TaskItem, LocationUpdate, User, LoginRequest, Category
 from store_logic import find_nearby_deals
+
+# 1. LOAD ENVIRONMENT VARIABLES
+load_dotenv()
 
 app = FastAPI()
 
@@ -19,24 +25,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- FILE BASED DATABASE ---
-USERS_FILE = "users_db.json"
-TASKS_FILE = "tasks_db.json"
+# 2. CONNECT TO MONGODB
+# If no env var is found, it will try strictly local, but you should set the MONGO_URI
+MONGO_URI = os.getenv("MONGO_URL") 
+if not MONGO_URI:
+    print("WARNING: MONGO_URI not set. Database features will fail.")
 
-def load_data(filename, default):
-    if not os.path.exists(filename):
-        return default
-    with open(filename, 'r') as f:
-        return json.load(f)
+client = MongoClient(MONGO_URI)
+db = client["nexttoyou_db"] # This creates the DB automatically
+users_collection = db["users"]
+tasks_collection = db["tasks"]
 
-def save_data(filename, data):
-    with open(filename, 'w') as f:
-        json.dump(data, f, indent=4)
+# --- HELPER: Fix MongoDB _id ---
+def fix_mongo_id(doc):
+    """Removes the internal MongoDB _id object so Pydantic doesn't complain"""
+    if doc:
+        doc.pop("_id", None)
+    return doc
 
-# Load DBs on startup
-users_db = load_data(USERS_FILE, {}) 
-tasks_db = load_data(TASKS_FILE, []) 
-
+# --- MODELS ---
 class ItemSearch(BaseModel):
     latitude: float
     longitude: float
@@ -52,87 +59,95 @@ class TaskUpdate(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"status": "NextToYou Server is Online"}
+    try:
+        # Test connection
+        client.admin.command('ping')
+        return {"status": "NextToYou Server is Online", "database": "Connected"}
+    except Exception as e:
+        return {"status": "NextToYou Server is Online", "database": "Disconnected", "error": str(e)}
 
 # --- AUTH ENDPOINTS ---
 @app.post("/register")
 def register(user: User):
-    if user.username in users_db:
+    # Check if user exists
+    if users_collection.find_one({"username": user.username}):
         raise HTTPException(status_code=400, detail="User already exists")
     
-    users_db[user.username] = user.dict()
-    save_data(USERS_FILE, users_db)
+    # Save to Mongo
+    users_collection.insert_one(user.dict())
     return {"message": "User registered", "user": user}
 
 @app.post("/login")
 def login(req: LoginRequest):
-    user = users_db.get(req.username)
+    # Find user
+    user = users_collection.find_one({"username": req.username})
+    
     if not user or user['password'] != req.password:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    return {"message": "Login successful", "user": user}
+    
+    return {"message": "Login successful", "user": fix_mongo_id(user)}
 
-# --- NEW: DELETE ACCOUNT ---
 @app.post("/delete-account")
 def delete_account(req: DeleteRequest):
-    if req.username not in users_db:
+    user = users_collection.find_one({"username": req.username})
+    
+    if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Check password for security
-    if users_db[req.username]["password"] != req.password:
+    if user["password"] != req.password:
         raise HTTPException(status_code=401, detail="Wrong password")
 
-    # 1. Delete the user
-    del users_db[req.username]
-    save_data(USERS_FILE, users_db)
-
-    # 2. Delete all their tasks
-    global tasks_db
-    tasks_db = [t for t in tasks_db if t.get('user_id') != req.username]
-    save_data(TASKS_FILE, tasks_db)
+    # Delete User
+    users_collection.delete_one({"username": req.username})
+    # Delete Tasks
+    tasks_collection.delete_many({"user_id": req.username})
 
     return {"message": "Account deleted"}
 
 # --- TASK ENDPOINTS ---
 @app.get("/tasks/{user_id}")
 def get_tasks(user_id: str):
-    return [t for t in tasks_db if t.get('user_id') == user_id]
+    # Fetch all tasks for this user
+    tasks_cursor = tasks_collection.find({"user_id": user_id})
+    return [fix_mongo_id(task) for task in tasks_cursor]
 
 @app.post("/tasks")
 def create_task(task: TaskItem):
-    task.id = str(uuid4())
-    tasks_db.append(task.dict())
-    save_data(TASKS_FILE, tasks_db)
+    task.id = str(uuid4()) # Generate ID here
+    tasks_collection.insert_one(task.dict())
     return task
-# ... (inside backend/main.py)
 
 @app.put("/tasks/{task_id}")
 def update_task(task_id: str, update: TaskUpdate):
-    global tasks_db
-    for task in tasks_db:
-        if task['id'] == task_id:
-            if update.title:
-                task['title'] = update.title
-            if update.category:
-                task['category'] = update.category
-            save_data(TASKS_FILE, tasks_db)
-            return task
-    raise HTTPException(status_code=404, detail="Task not found")
+    # Build update dictionary (only fields that are not None)
+    update_data = {k: v for k, v in update.dict().items() if v is not None}
+    
+    result = tasks_collection.update_one(
+        {"id": task_id}, 
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
+    return {"status": "updated", "updated_fields": update_data}
 
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: str):
-    global tasks_db
-    tasks_db = [t for t in tasks_db if t['id'] != task_id]
-    save_data(TASKS_FILE, tasks_db)
+    result = tasks_collection.delete_one({"id": task_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Task not found")
     return {"status": "deleted"}
 
-# --- PROXIMITY (Small Radius - For Push Notifications) ---
+# --- PROXIMITY & SEARCH ---
 @app.post("/check-proximity")
 def check_proximity(loc: LocationUpdate):
-    user = users_db.get(loc.user_id)
-    # Use User's preferred radius (usually small, e.g., 50m)
+    user = users_collection.find_one({"username": loc.user_id})
     radius = user['notification_radius'] if user else 50
 
-    user_tasks = [t['title'] for t in tasks_db if t.get('user_id') == loc.user_id and not t['is_completed']]
+    # Get active tasks from DB
+    active_tasks_cursor = tasks_collection.find({"user_id": loc.user_id, "is_completed": False})
+    user_tasks = [t['title'] for t in active_tasks_cursor]
     
     if not user_tasks:
         return {"message": "No active tasks."}
@@ -140,9 +155,8 @@ def check_proximity(loc: LocationUpdate):
     deals = find_nearby_deals(loc.latitude, loc.longitude, user_tasks, radius=radius)
     return {"nearby": deals}
 
-# --- MAP SEARCH (Huge Radius - For Planning) ---
 @app.post("/search-item")
 def search_item(search: ItemSearch):
-    # SEARCH RADIUS: 20,000 meters (20km) so you see EVERYTHING in the city
+    # Uses store_logic which is still mock-based (fine for now)
     deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name], radius=20000)
     return {"results": deals}
