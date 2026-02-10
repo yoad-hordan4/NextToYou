@@ -2,11 +2,11 @@ import json
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional
+from typing import List, Dict
 from uuid import uuid4
-from pydantic import BaseModel
+from pydantic import BaseModel 
 
-from models import TaskItem, LocationUpdate, User, LoginRequest, Category
+from models import TaskItem, LocationUpdate, User, LoginRequest
 from store_logic import find_nearby_deals
 
 app = FastAPI()
@@ -26,21 +26,17 @@ TASKS_FILE = "tasks_db.json"
 def load_data(filename, default):
     if not os.path.exists(filename):
         return default
-    try:
-        with open(filename, 'r') as f:
-            return json.load(f)
-    except:
-        return default
+    with open(filename, 'r') as f:
+        return json.load(f)
 
 def save_data(filename, data):
     with open(filename, 'w') as f:
         json.dump(data, f, indent=4)
 
-# Load DBs into memory on startup
+# Load DBs on startup
 users_db = load_data(USERS_FILE, {}) 
 tasks_db = load_data(TASKS_FILE, []) 
 
-# --- MODELS ---
 class ItemSearch(BaseModel):
     latitude: float
     longitude: float
@@ -56,7 +52,7 @@ class TaskUpdate(BaseModel):
 
 @app.get("/")
 def read_root():
-    return {"status": "NextToYou Server is Online (Local JSON Mode)"}
+    return {"status": "NextToYou Server is Online"}
 
 # --- AUTH ENDPOINTS ---
 @app.post("/register")
@@ -75,11 +71,13 @@ def login(req: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"message": "Login successful", "user": user}
 
+# --- NEW: DELETE ACCOUNT ---
 @app.post("/delete-account")
 def delete_account(req: DeleteRequest):
     if req.username not in users_db:
         raise HTTPException(status_code=404, detail="User not found")
     
+    # Check password for security
     if users_db[req.username]["password"] != req.password:
         raise HTTPException(status_code=401, detail="Wrong password")
 
@@ -105,9 +103,11 @@ def create_task(task: TaskItem):
     tasks_db.append(task.dict())
     save_data(TASKS_FILE, tasks_db)
     return task
+# ... (inside backend/main.py)
 
 @app.put("/tasks/{task_id}")
 def update_task(task_id: str, update: TaskUpdate):
+    global tasks_db
     for task in tasks_db:
         if task['id'] == task_id:
             if update.title:
@@ -121,19 +121,15 @@ def update_task(task_id: str, update: TaskUpdate):
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: str):
     global tasks_db
-    original_len = len(tasks_db)
     tasks_db = [t for t in tasks_db if t['id'] != task_id]
-    
-    if len(tasks_db) == original_len:
-        raise HTTPException(status_code=404, detail="Task not found")
-        
     save_data(TASKS_FILE, tasks_db)
     return {"status": "deleted"}
 
-# --- PROXIMITY & SEARCH ---
+# --- PROXIMITY (Small Radius - For Push Notifications) ---
 @app.post("/check-proximity")
 def check_proximity(loc: LocationUpdate):
     user = users_db.get(loc.user_id)
+    # Use User's preferred radius (usually small, e.g., 50m)
     radius = user['notification_radius'] if user else 50
 
     user_tasks = [t['title'] for t in tasks_db if t.get('user_id') == loc.user_id and not t['is_completed']]
@@ -144,7 +140,9 @@ def check_proximity(loc: LocationUpdate):
     deals = find_nearby_deals(loc.latitude, loc.longitude, user_tasks, radius=radius)
     return {"nearby": deals}
 
+# --- MAP SEARCH (Huge Radius - For Planning) ---
 @app.post("/search-item")
 def search_item(search: ItemSearch):
+    # SEARCH RADIUS: 20,000 meters (20km) so you see EVERYTHING in the city
     deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name], radius=20000)
     return {"results": deals}

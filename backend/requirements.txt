@@ -2,6 +2,3 @@ fastapi
 uvicorn
 pydantic
 scikit-learn
-pymongo
-python-dotenv
-dnspython
