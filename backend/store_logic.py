@@ -1,4 +1,5 @@
 import math
+import json
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from mock_data import STORES_DB
@@ -22,7 +23,19 @@ def find_nearby_deals(user_lat, user_lon, user_items, radius=50):
         dist = haversine_distance(user_lat, user_lon, store["lat"], store["lon"])
         
         if dist <= radius:
-            store_inventory = [item["item"] for item in store["inventory"]]
+            # FIX: Parse inventory if it's a JSON string
+            inventory = store["inventory"]
+            if isinstance(inventory, str):
+                try:
+                    inventory = json.loads(inventory)
+                except:
+                    continue
+            
+            # Check if inventory is valid
+            if not inventory or not isinstance(inventory, list):
+                continue
+            
+            store_inventory = [item["item"] for item in inventory]
             if not store_inventory:
                 continue
 
@@ -40,7 +53,7 @@ def find_nearby_deals(user_lat, user_lon, user_items, radius=50):
                     score = cosine_sim[i][best_match_idx]
 
                     if score > 0.3:  # Threshold for "good enough" match
-                        matched_product = store["inventory"][best_match_idx]
+                        matched_product = inventory[best_match_idx]
                         found_items.append(matched_product)
                 
                 if found_items:
@@ -51,7 +64,8 @@ def find_nearby_deals(user_lat, user_lon, user_items, radius=50):
                         "distance": int(dist),
                         "found_items": found_items
                     })
-            except:
+            except Exception as e:
+                print(f"Error processing store {store.get('name', 'unknown')}: {str(e)}")
                 continue
 
     return nearby_deals
