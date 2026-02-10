@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, TextInput, Button, FlatList, TouchableOpacity, SafeAreaView, KeyboardAvoidingView, Alert, Platform, Modal, Linking, LayoutAnimation, UIManager, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TextInput, Button, FlatList, TouchableOpacity, SafeAreaView, KeyboardAvoidingView, Alert, Platform, Modal, Linking, LayoutAnimation, UIManager } from 'react-native';
 import * as Location from 'expo-location';
 import * as Notifications from 'expo-notifications';
 import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
@@ -23,11 +23,6 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// --- CONSTANTS ---
-const CATEGORIES = [
-  "Supermarket", "Pharmacy", "Hardware", "Pet Shop", "Post Office", "Phone Repair", "General"
-];
-
 interface Task {
   id: string;
   title: string;
@@ -35,133 +30,87 @@ interface Task {
 }
 
 export default function HomeScreen() {
-  // --- STATE ---
+  // User & Data State
   const [user, setUser] = useState<any>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  
-  // Main Input (Adding new items)
   const [text, setText] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('Supermarket');
+  const [category, setCategory] = useState('Supermarket');
   
-  // Edit Mode State (For the Modal)
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [editModalText, setEditModalText] = useState('');
-
-  // Location & Tracking
+  // Location & Tracking State
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [isTracking, setIsTracking] = useState(false);
   
-  // Modal & Map
+  // Modal & Map State
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const [itemDeals, setItemDeals] = useState<any[]>([]);
   
-  // Smart Notifications Memory
-  const notifiedDealsRef = useRef<Set<string>>(new Set());
+  const lastNotificationTime = useRef<number>(0);
 
-  // --- INITIALIZATION ---
   useEffect(() => {
     checkLogin();
-    setupNotifications();
-
-    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const data = response.notification.request.content.data as { url?: string };
-      if (data?.url) {
-        Linking.openURL(data.url); 
-      }
-    });
-
-    return () => subscription.remove();
   }, []);
 
-  const setupNotifications = async () => {
-    const { status } = await Notifications.requestPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission missing', 'Enable notifications to get proximity alerts!');
-    }
-  };
-
-  // --- AUTH ---
+  // 1. AUTH CHECK
   const checkLogin = async () => {
     const session = await AsyncStorage.getItem('user_session');
     if (!session) {
+      // Redirect to login if no session found
       router.replace('/login'); 
       return;
     }
     const userData = JSON.parse(session);
     setUser(userData);
+    
+    // Load data for this user
     fetchTasks(userData.username);
     startSmartTracking(userData);
   };
 
   const logout = async () => {
     await AsyncStorage.removeItem('user_session');
-    notifiedDealsRef.current.clear();
     router.replace('/login');
   };
 
-  const deleteAccount = async () => {
-    Alert.alert(
-      "Delete Account",
-      "Are you sure? This cannot be undone.",
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Delete", 
-          style: "destructive", 
-          onPress: async () => {
-            if (!user) return;
-            try {
-              const res = await fetch(`${API_BASE}/delete-account`, {
-                method: 'POST',
-                headers: API_HEADERS,
-                body: JSON.stringify({ username: user.username, password: user.password })
-              });
-              if (res.ok) {
-                await AsyncStorage.removeItem('user_session');
-                router.replace('/login');
-              } else {
-                alert("Failed to delete account");
-              }
-            } catch (e) { alert("Network error"); }
-          }
-        }
-      ]
-    );
-  };
-
-  // --- SMART TRACKING ---
+  // 2. SMART TRACKING (Battery Saver)
   const startSmartTracking = async (userData: any) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
+    // Function to check time and decide whether to pull GPS
     const checkTimeAndTrack = async () => {
-        const session = await AsyncStorage.getItem('user_session');
-        if (!session) {
-            setIsTracking(false);
-            return; 
-        }
-
         const currentHour = new Date().getHours();
         const { active_start_hour, active_end_hour } = userData;
+
+        // Check if current time is within user's active window
+        // (Handling simpler case where start < end. If start > end (overnight), logic needs slight tweak)
         const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
 
         if (isActiveTime) {
             setIsTracking(true);
+            // Get single accurate location to save battery vs continuous watch
             let loc = await Location.getCurrentPositionAsync({});
             setLocation(loc);
             checkProximity(loc.coords.latitude, loc.coords.longitude, userData.username);
         } else {
             setIsTracking(false);
+            console.log("Sleeping... outside active hours.");
         }
     };
 
+    // Run immediately
     checkTimeAndTrack();
+    
+    // Then run every 30 seconds
     const intervalId = setInterval(checkTimeAndTrack, 30000); 
     return () => clearInterval(intervalId);
   };
 
   const checkProximity = async (lat: number, lon: number, userId: string) => {
+    const now = Date.now();
+    // 2-minute cooldown between alerts
+    if (now - lastNotificationTime.current < 120000) return;
+
     try {
       const response = await fetch(`${API_BASE}/check-proximity`, {
         method: 'POST',
@@ -174,159 +123,47 @@ export default function HomeScreen() {
       });
       const data = await response.json();
       
-      const currentDeals = data.nearby || [];
-      const currentDealIds = new Set<string>();
-      const newDealsToNotify = [];
-
-      for (const deal of currentDeals) {
-        for (const foundItem of deal.found_items) {
-             const uniqueId = `${deal.store}|${foundItem.item}`;
-             currentDealIds.add(uniqueId);
-
-             if (!notifiedDealsRef.current.has(uniqueId)) {
-                 newDealsToNotify.push({ store: deal, item: foundItem });
-             }
-        }
+      if (data.nearby && data.nearby.length > 0) {
+        const bestDeal = data.nearby[0];
+        const item = bestDeal.found_items[0];
+        
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: `🎯 Near ${bestDeal.store}!`,
+            body: `Don't forget: ${item.item} (${item.price}₪)`,
+            data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
+          },
+          trigger: null,
+        });
+        lastNotificationTime.current = now;
       }
-
-      for (const { store, item } of newDealsToNotify) {
-          await Notifications.scheduleNotificationAsync({
-              content: {
-                  title: `🎯 Near ${store.store}!`,
-                  body: `Found: ${item.item} (${item.price}₪)`,
-                  data: { url: `maps://0,0?q=${store.lat},${store.lon}(${store.store})` },
-              },
-              trigger: null,
-          });
-      }
-      notifiedDealsRef.current = currentDealIds;
     } catch (e) { console.log("Proximity error", e); }
   };
 
-  // --- CRUD ACTIONS ---
-  const fetchTasks = async (username: string) => {
-    if (!username) return;
-    try {
-        const res = await fetch(`${API_BASE}/tasks/${username}`, { headers: API_HEADERS });
-        if (res.ok) setTasks(await res.json());
-    } catch(e) { console.log(e); }
-  };
-
-  const handleAdd = async () => {
-    if (!text || !user) return;
-    
-    // Create New Task
-    await fetch(`${API_BASE}/tasks`, {
-      method: 'POST',
-      headers: API_HEADERS,
-      body: JSON.stringify({ 
-          title: text, 
-          category: selectedCategory, 
-          is_completed: false,
-          user_id: user.username
-      }),
-    });
-    
-    // Instant Check for new item
-    if (location) {
-        performSearch(text, location.coords.latitude, location.coords.longitude, true);
-    }
-    
-    setText('');
-    fetchTasks(user.username);
-  };
-
-  // --- EDITING LOGIC ---
-  const startEdit = async (task: Task) => {
-    // 1. Set Edit Mode
-    setEditingTaskId(task.id);
-    setEditModalText(task.title); // Pre-fill modal input with current name
-    setSelectedItem(task.title);
-    
-    // 2. Open Map immediately with current name
-    setModalVisible(true);
-    if (location) {
-        performSearch(task.title, location.coords.latitude, location.coords.longitude, false);
-    }
-  };
-
-  const saveEditInModal = async () => {
-    if (!editingTaskId || !editModalText || !user) return;
-
-    // 1. Update Backend
-    await fetch(`${API_BASE}/tasks/${editingTaskId}`, {
-        method: 'PUT',
-        headers: API_HEADERS,
-        body: JSON.stringify({ title: editModalText }),
-    });
-
-    // 2. Refresh List
-    fetchTasks(user.username);
-
-    // 3. Update Map with NEW Name immediately
-    setSelectedItem(editModalText);
-    if (location) {
-        performSearch(editModalText, location.coords.latitude, location.coords.longitude, false);
-    }
-    
-    // 4. (Optional) Close Modal or Keep open to see results?
-    // Let's keep it open so user sees the new pins
-    Alert.alert("Updated!", "Item updated and map refreshed.");
-  };
-
-  const deleteTask = async (id: string) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE', headers: API_HEADERS });
-    fetchTasks(user.username);
-  };
-
-  // --- MAP & SEARCH ---
-  const performSearch = async (query: string, lat: number, lon: number, isInstantCheck: boolean) => {
-      try {
-          const response = await fetch(`${API_BASE}/search-item`, {
-              method: 'POST',
-              headers: API_HEADERS,
-              body: JSON.stringify({ 
-                  latitude: lat, 
-                  longitude: lon, 
-                  item_name: query 
-              }),
-          });
-          const data = await response.json();
-          const results = data.results || [];
-
-          // Update Map State
-          if (!isInstantCheck) {
-              setItemDeals(results);
-          }
-
-          // Handle Instant Notifications (Only for Add)
-          if (isInstantCheck && results.length > 0) {
-              const bestDeal = results[0];
-              if (bestDeal.distance < 500) {
-                  const item = bestDeal.found_items[0];
-                  await Notifications.scheduleNotificationAsync({
-                      content: {
-                          title: `🎯 Found ${item.item}!`,
-                          body: `At ${bestDeal.store} (${bestDeal.distance}m) - ${item.price}₪`,
-                          data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}(${bestDeal.store})` },
-                      },
-                      trigger: null,
-                  });
-              }
-          }
-      } catch (e) { console.log("Search error", e); }
-  };
-
-  const openItemMenu = (itemTitle: string) => {
+  // 3. UI ACTIONS
+  const openItemMenu = async (itemTitle: string) => {
     if (!location) {
       alert("Locating you...");
       return;
     }
-    setEditingTaskId(null); // Not editing, just viewing
+    
     setSelectedItem(itemTitle);
     setModalVisible(true);
-    performSearch(itemTitle, location.coords.latitude, location.coords.longitude, false);
+    setItemDeals([]); 
+
+    try {
+      const response = await fetch(`${API_BASE}/search-item`, {
+        method: 'POST',
+        headers: API_HEADERS,
+        body: JSON.stringify({ 
+          latitude: location.coords.latitude, 
+          longitude: location.coords.longitude,
+          item_name: itemTitle 
+        }),
+      });
+      const data = await response.json();
+      setItemDeals(data.results || []);
+    } catch (e) { alert("Network Error"); }
   };
 
   const navigateToStore = (lat: number, lon: number, label: string) => {
@@ -339,121 +176,95 @@ export default function HomeScreen() {
     if (url) Linking.openURL(url);
   };
 
+  // 4. CRUD OPERATIONS
+  const fetchTasks = async (username: string) => {
+    if (!username) return;
+    try {
+        const res = await fetch(`${API_BASE}/tasks/${username}`, { headers: API_HEADERS });
+        if (res.ok) setTasks(await res.json());
+    } catch(e) { console.log(e); }
+  };
+
+  const addTask = async () => {
+    if (!text || !user) return;
+    
+    await fetch(`${API_BASE}/tasks`, {
+      method: 'POST',
+      headers: API_HEADERS,
+      body: JSON.stringify({ 
+          title: text, 
+          category, 
+          is_completed: false,
+          user_id: user.username
+      }),
+    });
+    
+    setText('');
+    fetchTasks(user.username);
+
+    // Instant check
+    if (location) {
+        checkProximity(location.coords.latitude, location.coords.longitude, user.username);
+    }
+  };
+
+  const deleteTask = async (id: string) => {
+    // Smooth Animation
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    
+    await fetch(`${API_BASE}/tasks/${id}`, { method: 'DELETE', headers: API_HEADERS });
+    fetchTasks(user.username);
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.contentContainer}>
         
-        {/* Header */}
+        {/* Header with Logout */}
         <View style={styles.headerRow}>
             <Text style={styles.header}>My List</Text>
-            <View style={{flexDirection: 'row', gap: 15}}>
-              <TouchableOpacity onPress={logout}>
-                  <Text style={{color:'blue', fontWeight:'600'}}>Logout</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={deleteAccount}>
-                  <Text style={{color:'red', fontWeight:'600'}}>Delete</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity onPress={logout}>
+                <Text style={{color:'blue', fontWeight:'600'}}>Logout</Text>
+            </TouchableOpacity>
         </View>
         
+        {/* Status Indicator */}
         <Text style={styles.subHeader}>
             {isTracking ? "🟢 Active & Searching" : "🌙 Sleeping (Outside Active Hours)"}
         </Text>
 
-        {/* --- ADD INPUT AREA --- */}
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={styles.inputCard}>
-            
-            {/* Category Chips */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom: 10}}>
-              {CATEGORIES.map(cat => (
-                <TouchableOpacity 
-                  key={cat} 
-                  onPress={() => setSelectedCategory(cat)}
-                  style={[
-                    styles.catChip, 
-                    selectedCategory === cat && styles.catChipActive
-                  ]}
-                >
-                  <Text style={[
-                    styles.catText, 
-                    selectedCategory === cat && styles.catTextActive
-                  ]}>
-                    {cat}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-
-            <View style={styles.inputWrapper}>
-              <TextInput 
-                style={styles.input} 
-                placeholder="Add new item..." 
-                value={text} 
-                onChangeText={setText} 
-              />
-              <Button title="Add" onPress={handleAdd} />
-            </View>
-
+          <View style={styles.inputWrapper}>
+            <TextInput style={styles.input} placeholder="Add item..." value={text} onChangeText={setText} />
+            <Button title="Add" onPress={addTask} />
           </View>
         </KeyboardAvoidingView>
 
-        {/* --- LIST --- */}
         <FlatList
           data={tasks}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
-            <View style={styles.taskItem}>
-              {/* Click to View Map */}
-              <TouchableOpacity style={{flex: 1}} onPress={() => openItemMenu(item.title)}>
+            <TouchableOpacity style={styles.taskItem} onPress={() => openItemMenu(item.title)}>
+              <View>
                 <Text style={styles.taskTitle}>{item.title}</Text>
                 <Text style={styles.taskCategory}>{item.category}</Text>
-              </TouchableOpacity>
-              
-              <View style={styles.actions}>
-                {/* EDIT BUTTON -> Opens Modal */}
-                <TouchableOpacity onPress={() => startEdit(item)} style={styles.editBtn}>
-                    <Text style={{color: '#007AFF', fontWeight: 'bold'}}>Edit</Text>
-                </TouchableOpacity>
-
-                {/* DONE BUTTON */}
-                <TouchableOpacity onPress={() => deleteTask(item.id)}>
-                    <Text style={styles.deleteText}>Done</Text>
-                </TouchableOpacity>
               </View>
-            </View>
+              <TouchableOpacity onPress={() => deleteTask(item.id)}>
+                <Text style={styles.deleteText}>Done</Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
           )}
         />
 
-        {/* --- MAP MODAL (NOW WITH EDIT SUPPORT) --- */}
+        {/* --- MAP MODAL (Full Implementation) --- */}
         <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
           <View style={styles.modalContainer}>
-            
-            {/* MODAL HEADER: Edit Mode vs View Mode */}
             <View style={styles.modalHeader}>
-              {editingTaskId ? (
-                 // EDIT MODE HEADER
-                 <View style={styles.editHeaderContainer}>
-                    <Text style={styles.editLabel}>Rename Item:</Text>
-                    <View style={styles.editRow}>
-                        <TextInput 
-                            style={styles.editInput} 
-                            value={editModalText} 
-                            onChangeText={setEditModalText} 
-                        />
-                        <TouchableOpacity style={styles.saveBtn} onPress={saveEditInModal}>
-                            <Text style={{color: 'white', fontWeight: 'bold'}}>Update</Text>
-                        </TouchableOpacity>
-                    </View>
-                 </View>
-              ) : (
-                 // VIEW MODE HEADER
-                 <Text style={styles.modalTitle}>Searching: {selectedItem}</Text>
-              )}
-              
+              <Text style={styles.modalTitle}>Searching: {selectedItem}</Text>
               <Button title="Close" onPress={() => setModalVisible(false)} />
             </View>
 
+            {/* MAP VIEW */}
             <View style={styles.mapContainer}>
                {location && (
                 <MapView
@@ -463,8 +274,8 @@ export default function HomeScreen() {
                   initialRegion={{
                     latitude: location.coords.latitude,
                     longitude: location.coords.longitude,
-                    latitudeDelta: 0.1, 
-                    longitudeDelta: 0.1,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
                   }}
                 >
                   {itemDeals.map((deal, index) => (
@@ -480,6 +291,7 @@ export default function HomeScreen() {
                )}
             </View>
 
+            {/* LIST BELOW MAP */}
             <FlatList
               data={itemDeals}
               style={{ flex: 1 }}
@@ -514,43 +326,20 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
   header: { fontSize: 32, fontWeight: '800', color: '#333' },
   subHeader: { color: '#666', marginBottom: 20, marginTop: 5 },
-  
-  // Input Area
-  inputCard: { backgroundColor: 'white', padding: 15, borderRadius: 15, marginBottom: 15, elevation: 3 },
-  inputWrapper: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  input: { flex: 1, backgroundColor: '#F9F9F9', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#eee' },
-  
-  // Category Chips
-  catChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: '#eee', marginRight: 8 },
-  catChipActive: { backgroundColor: '#007AFF' },
-  catText: { color: '#666', fontSize: 12, fontWeight: '600' },
-  catTextActive: { color: 'white' },
-
-  // Task Item
+  inputWrapper: { flexDirection: 'row', gap: 10, marginBottom: 15 },
+  input: { flex: 1, backgroundColor: 'white', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#ddd' },
   taskItem: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 2 },
   taskTitle: { fontSize: 18, fontWeight: '600', color: '#333' },
-  taskCategory: { color: '#888', fontSize: 12, marginTop: 2 },
-  
-  // Actions
-  actions: { flexDirection: 'row', gap: 15 },
-  editBtn: { marginRight: 5 },
+  taskCategory: { color: '#888', fontSize: 12 },
   deleteText: { color: 'red', fontWeight: '600' },
   
-  // Modal & Edit Styles
   modalContainer: { flex: 1, backgroundColor: '#fff' },
-  modalHeader: { padding: 20, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: 'white', zIndex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  modalHeader: { padding: 20, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'white', zIndex: 1 },
   modalTitle: { fontSize: 20, fontWeight: 'bold' },
   
-  // Edit Header Styles
-  editHeaderContainer: { flex: 1, marginRight: 10 },
-  editLabel: { fontSize: 12, color: '#666', marginBottom: 4 },
-  editRow: { flexDirection: 'row', gap: 10 },
-  editInput: { flex: 1, backgroundColor: '#F5F5F5', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#ddd' },
-  saveBtn: { backgroundColor: '#007AFF', padding: 10, borderRadius: 8, justifyContent: 'center' },
-
-  // Map & List
   mapContainer: { height: 300, width: '100%', marginBottom: 10 },
   map: { width: '100%', height: '100%' },
+
   dealCard: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee', alignItems: 'center' },
   dealInfo: { flex: 1 },
   storeName: { fontSize: 18, fontWeight: '600' },

@@ -15,13 +15,13 @@ export default function RootLayout() {
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <Stack>
-        {/* Main App */}
+        {/* 1. Main App (Tabs) */}
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        
-        {/* Auth Screens - HIDES the "(auth)/login" header */}
+
+        {/* 2. Authentication Screens (Login/Register) <--- ADD THIS LINE */}
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
 
-        {/* Modal */}
+        {/* 3. Modals */}
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>
       <StatusBar style="auto" />
