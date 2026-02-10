@@ -2,8 +2,9 @@ import json
 import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict
+from typing import List, Optional
 from uuid import uuid4
+from pydantic import BaseModel 
 
 from models import TaskItem, LocationUpdate, User, LoginRequest
 from store_logic import find_nearby_deals
@@ -25,20 +26,36 @@ TASKS_FILE = "tasks_db.json"
 def load_data(filename, default):
     if not os.path.exists(filename):
         return default
-    with open(filename, 'r') as f:
-        return json.load(f)
+    try:
+        with open(filename, 'r') as f:
+            return json.load(f)
+    except:
+        return default
 
 def save_data(filename, data):
     with open(filename, 'w') as f:
         json.dump(data, f, indent=4)
 
 # Load DBs on startup
-users_db = load_data(USERS_FILE, {}) # Dict: {username: UserObj}
-tasks_db = load_data(TASKS_FILE, []) # List of TaskItem dicts
+users_db = load_data(USERS_FILE, {}) 
+tasks_db = load_data(TASKS_FILE, []) 
+
+class ItemSearch(BaseModel):
+    latitude: float
+    longitude: float
+    item_name: str
+
+class DeleteRequest(BaseModel):
+    username: str
+    password: str
+
+class TaskUpdate(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
 
 @app.get("/")
 def read_root():
-    return {"status": "NextToYou Server is Online"}
+    return {"status": "NextToYou Server is Online (JSON Mode)"}
 
 # --- AUTH ENDPOINTS ---
 @app.post("/register")
@@ -57,10 +74,29 @@ def login(req: LoginRequest):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"message": "Login successful", "user": user}
 
-# --- TASK ENDPOINTS (User Specific) ---
+@app.post("/delete-account")
+def delete_account(req: DeleteRequest):
+    if req.username not in users_db:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if users_db[req.username]["password"] != req.password:
+        raise HTTPException(status_code=401, detail="Wrong password")
+
+    # 1. Delete the user
+    del users_db[req.username]
+    save_data(USERS_FILE, users_db)
+
+    # 2. Delete all their tasks
+    global tasks_db
+    tasks_db = [t for t in tasks_db if t.get('user_id') != req.username]
+    save_data(TASKS_FILE, tasks_db)
+
+    return {"message": "Account deleted"}
+
+# --- TASK ENDPOINTS ---
 @app.get("/tasks/{user_id}")
 def get_tasks(user_id: str):
-    # Filter tasks for this specific user
+    # Filter tasks by user_id
     return [t for t in tasks_db if t.get('user_id') == user_id]
 
 @app.post("/tasks")
@@ -70,26 +106,46 @@ def create_task(task: TaskItem):
     save_data(TASKS_FILE, tasks_db)
     return task
 
+@app.put("/tasks/{task_id}")
+def update_task(task_id: str, update: TaskUpdate):
+    global tasks_db
+    for task in tasks_db:
+        if task['id'] == task_id:
+            if update.title:
+                task['title'] = update.title
+            if update.category:
+                task['category'] = update.category
+            save_data(TASKS_FILE, tasks_db)
+            return task
+    raise HTTPException(status_code=404, detail="Task not found")
+
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: str):
     global tasks_db
+    original_len = len(tasks_db)
     tasks_db = [t for t in tasks_db if t['id'] != task_id]
+    
+    if len(tasks_db) == original_len:
+        raise HTTPException(status_code=404, detail="Task not found")
+        
     save_data(TASKS_FILE, tasks_db)
     return {"status": "deleted"}
 
 # --- PROXIMITY ---
 @app.post("/check-proximity")
 def check_proximity(loc: LocationUpdate):
-    # 1. Get user settings for radius
     user = users_db.get(loc.user_id)
     radius = user['notification_radius'] if user else 50
 
-    # 2. Get user's tasks
     user_tasks = [t['title'] for t in tasks_db if t.get('user_id') == loc.user_id and not t['is_completed']]
     
     if not user_tasks:
         return {"message": "No active tasks."}
 
-    # 3. Find deals using User's custom radius
     deals = find_nearby_deals(loc.latitude, loc.longitude, user_tasks, radius=radius)
     return {"nearby": deals}
+
+@app.post("/search-item")
+def search_item(search: ItemSearch):
+    deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name], radius=20000)
+    return {"results": deals}

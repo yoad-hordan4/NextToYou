@@ -1,45 +1,57 @@
 import math
-# IMPORT THE NEW DATA
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from mock_data import STORES_DB
 
-def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371000 # Earth radius in meters
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
-    a = math.sin(delta_phi / 2.0)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2.0)**2
+# 1. Haversine Formula (Distance Calculation)
+def haversine_distance(lat1, lon1, lat2, lon2):
+    R = 6371000  # Radius of Earth in meters
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    
+    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-def find_nearby_deals(user_lat, user_lon, needed_items, radius=5000):
+# 2. Advanced Search (TF-IDF)
+def find_nearby_deals(user_lat, user_lon, user_items, radius=50):
     nearby_deals = []
     
     for store in STORES_DB:
-        dist = calculate_distance(user_lat, user_lon, store["lat"], store["lon"])
+        dist = haversine_distance(user_lat, user_lon, store["lat"], store["lon"])
         
-        # Only check stores within radius
         if dist <= radius:
-            found_items = []
-            for item in needed_items:
-                # Search inside the store's inventory
-                for store_item, price in store["inventory"].items():
-                    # "milk" matches "Soy Milk" or "Milk 3%"
-                    if item.lower() in store_item.lower(): 
-                        found_items.append({"item": store_item, "price": price})
-            
-            if found_items:
-                nearby_deals.append({
-                    "store": store["name"],
-                    "category": store["category"],
-                    "lat": store["lat"], 
-                    "lon": store["lon"],
-                    "distance": int(dist),
-                    "found_items": found_items
-                })
+            store_inventory = [item["item"] for item in store["inventory"]]
+            if not store_inventory:
+                continue
 
-    # Sort by Price (Cheapest first) -> Then by Distance
-    if nearby_deals:
-        nearby_deals.sort(key=lambda x: (x["found_items"][0]["price"], x["distance"]))
-        
+            # TF-IDF Matching
+            vectorizer = TfidfVectorizer()
+            all_text = user_items + store_inventory
+            try:
+                tfidf_matrix = vectorizer.fit_transform(all_text)
+                cosine_sim = cosine_similarity(tfidf_matrix[:len(user_items)], tfidf_matrix[len(user_items):])
+
+                found_items = []
+                for i, user_item in enumerate(user_items):
+                    # Check best match in this store
+                    best_match_idx = cosine_sim[i].argmax()
+                    score = cosine_sim[i][best_match_idx]
+
+                    if score > 0.3:  # Threshold for "good enough" match
+                        matched_product = store["inventory"][best_match_idx]
+                        found_items.append(matched_product)
+                
+                if found_items:
+                    nearby_deals.append({
+                        "store": store["name"],
+                        "lat": store["lat"],
+                        "lon": store["lon"],
+                        "distance": int(dist),
+                        "found_items": found_items
+                    })
+            except:
+                continue
+
     return nearby_deals
