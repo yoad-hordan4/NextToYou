@@ -156,5 +156,23 @@ STORES_DB = [
             {"item": "wine", "price": 35.00, "brand": "Golan Heights"},
             {"item": "beer", "price": 25.90, "brand": "Goldstar 6 pack"}
         ]
+    },
+    {
+        "id": "10",
+        "name": "Hakeara Dizengoff",
+        "lat": 32.1650,
+        "lon": 34.8410,
+        "address": "dizengoff St 91, Tel Aviv",
+        "inventory": [
+            {"item": "tulips", "price": 7.20, "brand": "Yotvata 3%"},
+            {"item": "roses", "price": 7.20, "brand": "Yotvata 1%"},
+            {"item": "daisies", "price": 6.00, "brand": "Berman"},
+            {"item": "flowers", "price": 15.50, "brand": "Large dozen"},
+            {"item": "cottage cheese", "price": 6.90, "brand": "Tnuva 5%"},
+            {"item": "cream cheese", "price": 8.90, "brand": "Philadelphia"},
+            {"item": "orange juice", "price": 9.90, "brand": "Prigat 1L"},
+            {"item": "apples", "price": 8.90, "brand": "Fresh per kg"},
+            {"item": "bananas", "price": 6.90, "brand": "Fresh per kg"}
+        ]
     }
 ]
