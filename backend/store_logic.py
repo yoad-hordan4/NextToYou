@@ -16,7 +16,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     return R * c
 
 # 2. Advanced Search (TF-IDF) with better fuzzy matching
-def find_nearby_deals(user_lat, user_lon, user_items, radius=5000):
+def find_nearby_deals(user_lat, user_lon, user_items, radius=500):
     nearby_deals = []
     
     print(f"[DEBUG] Searching for {user_items} near ({user_lat}, {user_lon}) within {radius}m")
