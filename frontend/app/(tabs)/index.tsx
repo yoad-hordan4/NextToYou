@@ -148,7 +148,7 @@ export default function HomeScreen() {
                  await Notifications.scheduleNotificationAsync({
                     content: {
                         title: `🎯 Near ${deal.store}!`,
-                        body: `Found: ${foundItem.item} (${foundItem.price}₪)`,
+                        body: `Found: ${foundItem.item} (₪${foundItem.price})`,
                         data: { url: `maps://0,0?q=${deal.lat},${deal.lon}(${deal.store})` },
                     },
                     trigger: null,
@@ -190,6 +190,7 @@ export default function HomeScreen() {
 
   const saveEditInModal = async () => {
     if (!editingTaskId || !editModalText || !user) return;
+    setEditingTaskId(null);
     await fetch(`${API_BASE}/tasks/${editingTaskId}`, {
         method: 'PUT',
         headers: API_HEADERS,
@@ -212,7 +213,7 @@ export default function HomeScreen() {
           const response = await fetch(`${API_BASE}/search-item`, {
               method: 'POST',
               headers: API_HEADERS,
-              body: JSON.stringify({ latitude: lat, longitude: lon, item_name: query }),
+              body: JSON.stringify({ latitude: lat, longitude: lon, item_name: query, radius: 10000 }),
           });
           const data = await response.json();
           const results = data.results || [];
@@ -223,8 +224,8 @@ export default function HomeScreen() {
               await Notifications.scheduleNotificationAsync({
                   content: {
                       title: `🎯 Found ${item.item}!`,
-                      body: `At ${results[0].store} - ${item.price}₪`,
-                      data: { url: `maps://0,0?q=${results[0].lat},${results[0].lon}` },
+                      body: `At ${results[0].store} - ₪${item.price}`,
+                      data: { url: `maps://0,0?q=${results[0].lat},${results[0].lon}(${results[0].store})` },
                   },
                   trigger: null,
               });
@@ -308,7 +309,12 @@ export default function HomeScreen() {
                 <MapView style={styles.map} provider={PROVIDER_DEFAULT} showsUserLocation={true}
                   initialRegion={{ latitude: location.coords.latitude, longitude: location.coords.longitude, latitudeDelta: 0.1, longitudeDelta: 0.1 }}>
                   {itemDeals.map((deal, index) => (
-                    <Marker key={index} coordinate={{ latitude: deal.lat, longitude: deal.lon }} title={deal.store} />
+                    <Marker 
+                      key={index} 
+                      coordinate={{ latitude: deal.lat, longitude: deal.lon }} 
+                      title={deal.store}
+                      description={`${deal.distance}m away • ${deal.found_items.length} item(s)`}
+                    />
                   ))}
                 </MapView>
                )}
@@ -319,9 +325,18 @@ export default function HomeScreen() {
                 <View style={styles.dealCard}>
                   <View style={styles.dealInfo}>
                     <Text style={styles.storeName}>{item.store}</Text>
-                    <Text style={styles.priceTag}>{item.found_items[0].price}₪</Text>
+                    <Text style={styles.storeAddress}>{item.address}</Text>
+                    <Text style={styles.distanceText}>📍 {item.distance}m away</Text>
+                    {item.found_items.map((foundItem: any, idx: number) => (
+                      <View key={idx} style={styles.itemRow}>
+                        <Text style={styles.itemName}>• {foundItem.item}</Text>
+                        <Text style={styles.priceTag}>₪{foundItem.price}</Text>
+                      </View>
+                    ))}
                   </View>
-                  <TouchableOpacity style={styles.goButton} onPress={() => Linking.openURL(`maps://0,0?q=${item.lat},${item.lon}`)}>
+                  <TouchableOpacity 
+                    style={styles.goButton} 
+                    onPress={() => Linking.openURL(`maps://0,0?q=${item.lat},${item.lon}(${item.store})`)}>
                     <Text style={styles.goButtonText}>GO</Text>
                   </TouchableOpacity>
                 </View>
@@ -365,8 +380,12 @@ const styles = StyleSheet.create({
   map: { width: '100%', height: '100%' },
   dealCard: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee', alignItems: 'center' },
   dealInfo: { flex: 1 },
-  storeName: { fontSize: 18, fontWeight: '600' },
-  priceTag: { color: 'green', fontWeight: 'bold', fontSize: 16 },
-  goButton: { backgroundColor: '#007AFF', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 20 },
-  goButtonText: { color: 'white', fontWeight: 'bold' }
+  storeName: { fontSize: 18, fontWeight: '700', color: '#333', marginBottom: 4 },
+  storeAddress: { fontSize: 12, color: '#888', marginBottom: 4 },
+  distanceText: { fontSize: 12, color: '#666', marginBottom: 8 },
+  itemRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, paddingLeft: 8 },
+  itemName: { fontSize: 14, color: '#555' },
+  priceTag: { color: '#22C55E', fontWeight: 'bold', fontSize: 16 },
+  goButton: { backgroundColor: '#007AFF', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 25 },
+  goButtonText: { color: 'white', fontWeight: 'bold', fontSize: 14 }
 });

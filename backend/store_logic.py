@@ -15,7 +15,7 @@ def haversine_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-# 2. Advanced Search (TF-IDF)
+# 2. Advanced Search (TF-IDF) with better fuzzy matching
 def find_nearby_deals(user_lat, user_lon, user_items, radius=50):
     nearby_deals = []
     
@@ -39,8 +39,8 @@ def find_nearby_deals(user_lat, user_lon, user_items, radius=50):
             if not store_inventory:
                 continue
 
-            # TF-IDF Matching
-            vectorizer = TfidfVectorizer()
+            # TF-IDF Matching with improved threshold
+            vectorizer = TfidfVectorizer(ngram_range=(1, 2))  # Use bigrams for better matching
             all_text = user_items + store_inventory
             try:
                 tfidf_matrix = vectorizer.fit_transform(all_text)
@@ -52,13 +52,20 @@ def find_nearby_deals(user_lat, user_lon, user_items, radius=50):
                     best_match_idx = cosine_sim[i].argmax()
                     score = cosine_sim[i][best_match_idx]
 
-                    if score > 0.3:  # Threshold for "good enough" match
+                    # Lower threshold for better fuzzy matching (milk matches 1% milk, etc)
+                    if score > 0.2:  # Lowered from 0.3 for better matching
                         matched_product = inventory[best_match_idx]
-                        found_items.append(matched_product)
+                        found_items.append({
+                            **matched_product,
+                            "match_score": float(score),
+                            "searched_for": user_item
+                        })
                 
                 if found_items:
                     nearby_deals.append({
                         "store": store["name"],
+                        "store_id": store["id"],
+                        "address": store.get("address", ""),
                         "lat": store["lat"],
                         "lon": store["lon"],
                         "distance": int(dist),
@@ -68,4 +75,6 @@ def find_nearby_deals(user_lat, user_lon, user_items, radius=50):
                 print(f"Error processing store {store.get('name', 'unknown')}: {str(e)}")
                 continue
 
+    # Sort by distance
+    nearby_deals.sort(key=lambda x: x['distance'])
     return nearby_deals

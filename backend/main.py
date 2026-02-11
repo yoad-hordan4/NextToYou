@@ -48,6 +48,7 @@ class ItemSearch(BaseModel):
     latitude: float
     longitude: float
     item_name: str
+    radius: Optional[int] = 5000  # Default 5km radius
 
 class DeleteRequest(BaseModel):
     username: str
@@ -161,7 +162,7 @@ def check_proximity(loc: LocationUpdate):
 @app.post("/search-item")
 def search_item(search: ItemSearch):
     try:
-        deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name], radius=20000)
+        deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name], radius=search.radius)
         return {"results": deals}
     except Exception as e:
         print(f"Search item error: {e}")
