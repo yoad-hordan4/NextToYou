@@ -12,11 +12,12 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-// --- 🔔 NOTIFICATION HANDLER ---
+// --- 🔔 1. IOS SOUND HANDLER ---
+// This tells the iPhone: "Even if the app is open, show the alert and play the sound."
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
-    shouldPlaySound: true,
+    shouldPlaySound: true, // <--- CRITICAL FOR IOS
     shouldSetBadge: false,
     shouldShowBanner: true,
     shouldShowList: true,
@@ -53,7 +54,7 @@ export default function HomeScreen() {
   
   const notifiedDealsRef = useRef<Set<string>>(new Set());
   
-  // Ref to hold the location subscription so we can stop it later
+  // 🛑 Tracker Subscription Reference (To stop it properly)
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
 
   useEffect(() => {
@@ -66,22 +67,13 @@ export default function HomeScreen() {
     });
     return () => {
         subscription.remove();
-        stopTracking(); // Cleanup on unmount
+        stopTracking(); // Stop GPS when leaving
     };
   }, []);
 
   const setupNotifications = async () => {
     const { status } = await Notifications.requestPermissionsAsync();
     if (status !== 'granted') Alert.alert('Permission missing', 'Enable notifications for alerts!');
-
-    if (Platform.OS === 'android') {
-      await Notifications.setNotificationChannelAsync('default', {
-        name: 'Proximity Alerts',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#FF231F7C',
-      });
-    }
   };
 
   const checkLogin = async () => {
@@ -129,35 +121,36 @@ export default function HomeScreen() {
       setIsTracking(false);
   };
 
-  // --- 🚀 NEW: REAL-TIME MOVEMENT TRACKING ---
+  // --- 🚀 NEW: REAL-TIME MOVEMENT TRACKING (IPHONE FIX) ---
   const startSmartTracking = async (userData: any) => {
-    // 1. Stop any old trackers first
+    // 1. Clean up old trackers
     stopTracking();
 
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
-    // 2. Check "Active Hours" before starting
+    // 2. Check "Active Hours"
     const currentHour = new Date().getHours();
     const { active_start_hour, active_end_hour } = userData;
     const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
 
     if (!isActiveTime) {
         setIsTracking(false);
-        return; // Don't start tracking if outside hours
+        return; 
     }
 
     setIsTracking(true);
 
-    // 3. Start "Watching" (Triggers every 10 meters)
+    // 3. Start "Watching" (Triggers every 5 meters)
+    // This uses the GPS chip directly instead of a timer, so it doesn't get paused as easily.
     try {
         const sub = await Location.watchPositionAsync(
             {
-                accuracy: Location.Accuracy.High,
-                distanceInterval: 10, // Update every 10 meters moved
+                accuracy: Location.Accuracy.High, // Vital for walking accuracy
+                distanceInterval: 5,              // Update every 5 meters
             },
             (newLoc) => {
-                // This code runs AUTOMATICALLY whenever you move 10m
+                // This runs AUTOMATICALLY whenever you move 5m
                 setLocation(newLoc);
                 setLastCheckTime(new Date().toLocaleTimeString());
                 checkProximity(newLoc.coords.latitude, newLoc.coords.longitude, userData.username);
@@ -186,13 +179,13 @@ export default function HomeScreen() {
              currentDealIds.add(uniqueId);
              
              if (!notifiedDealsRef.current.has(uniqueId)) {
+                 // --- 🔔 SEND NOTIFICATION ---
                  await Notifications.scheduleNotificationAsync({
                     content: {
                         title: `🎯 Near ${deal.store}!`,
                         body: `Found: ${foundItem.item} (₪${foundItem.price}) - ${deal.distance}m away`,
                         data: { url: `maps://0,0?q=${deal.lat},${deal.lon}(${deal.store})` },
-                        sound: true, 
-                        priority: Notifications.AndroidNotificationPriority.MAX,
+                        sound: 'default', // <--- Explicitly request sound
                     },
                     trigger: null,
                  });
@@ -218,6 +211,7 @@ export default function HomeScreen() {
       headers: API_HEADERS,
       body: JSON.stringify({ title: text, category: selectedCategory, user_id: user.username }),
     });
+    // Instant Check
     if (location) performSearch(text, location.coords.latitude, location.coords.longitude, true);
     setText('');
     fetchTasks(user.username);
@@ -256,7 +250,7 @@ export default function HomeScreen() {
           const response = await fetch(`${API_BASE}/search-item`, {
               method: 'POST',
               headers: API_HEADERS,
-              body: JSON.stringify({ latitude: lat, longitude: lon, item_name: query, radius: 10000 }),
+              body: JSON.stringify({ latitude: lat, longitude: lon, item_name: query }),
           });
           const data = await response.json();
           const results = data.results || [];
@@ -274,8 +268,7 @@ export default function HomeScreen() {
                           title: `🎯 Found ${item.item}!`,
                           body: `At ${bestDeal.store} - ${item.price}₪`,
                           data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}` },
-                          sound: true,
-                          priority: Notifications.AndroidNotificationPriority.MAX,
+                          sound: 'default', // <--- Explicitly request sound
                       },
                       trigger: null,
                   });
