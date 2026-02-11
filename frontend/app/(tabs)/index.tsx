@@ -13,11 +13,10 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 // --- 🔔 1. IOS SOUND HANDLER ---
-// This tells the iPhone: "Even if the app is open, show the alert and play the sound."
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
-    shouldPlaySound: true, // <--- CRITICAL FOR IOS
+    shouldPlaySound: true, 
     shouldSetBadge: false,
     shouldShowBanner: true,
     shouldShowList: true,
@@ -54,7 +53,7 @@ export default function HomeScreen() {
   
   const notifiedDealsRef = useRef<Set<string>>(new Set());
   
-  // 🛑 Tracker Subscription Reference (To stop it properly)
+  // 🛑 Tracker Subscription Reference
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
 
   useEffect(() => {
@@ -67,7 +66,7 @@ export default function HomeScreen() {
     });
     return () => {
         subscription.remove();
-        stopTracking(); // Stop GPS when leaving
+        stopTracking(); 
     };
   }, []);
 
@@ -121,15 +120,14 @@ export default function HomeScreen() {
       setIsTracking(false);
   };
 
-  // --- 🚀 NEW: REAL-TIME MOVEMENT TRACKING (IPHONE FIX) ---
+  // --- 🚀 REAL-TIME MOVEMENT TRACKING ---
   const startSmartTracking = async (userData: any) => {
-    // 1. Clean up old trackers
     stopTracking();
 
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
-    // 2. Check "Active Hours"
+    // Check "Active Hours"
     const currentHour = new Date().getHours();
     const { active_start_hour, active_end_hour } = userData;
     const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
@@ -141,16 +139,13 @@ export default function HomeScreen() {
 
     setIsTracking(true);
 
-    // 3. Start "Watching" (Triggers every 5 meters)
-    // This uses the GPS chip directly instead of a timer, so it doesn't get paused as easily.
     try {
         const sub = await Location.watchPositionAsync(
             {
-                accuracy: Location.Accuracy.High, // Vital for walking accuracy
-                distanceInterval: 5,              // Update every 5 meters
+                accuracy: Location.Accuracy.High, 
+                distanceInterval: 5,              
             },
             (newLoc) => {
-                // This runs AUTOMATICALLY whenever you move 5m
                 setLocation(newLoc);
                 setLastCheckTime(new Date().toLocaleTimeString());
                 checkProximity(newLoc.coords.latitude, newLoc.coords.longitude, userData.username);
@@ -179,13 +174,12 @@ export default function HomeScreen() {
              currentDealIds.add(uniqueId);
              
              if (!notifiedDealsRef.current.has(uniqueId)) {
-                 // --- 🔔 SEND NOTIFICATION ---
                  await Notifications.scheduleNotificationAsync({
                     content: {
                         title: `🎯 Near ${deal.store}!`,
                         body: `Found: ${foundItem.item} (₪${foundItem.price}) - ${deal.distance}m away`,
                         data: { url: `maps://0,0?q=${deal.lat},${deal.lon}(${deal.store})` },
-                        sound: 'default', // <--- Explicitly request sound
+                        sound: 'default',
                     },
                     trigger: null,
                  });
@@ -211,7 +205,6 @@ export default function HomeScreen() {
       headers: API_HEADERS,
       body: JSON.stringify({ title: text, category: selectedCategory, user_id: user.username }),
     });
-    // Instant Check
     if (location) performSearch(text, location.coords.latitude, location.coords.longitude, true);
     setText('');
     fetchTasks(user.username);
@@ -268,7 +261,7 @@ export default function HomeScreen() {
                           title: `🎯 Found ${item.item}!`,
                           body: `At ${bestDeal.store} - ${item.price}₪`,
                           data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}` },
-                          sound: 'default', // <--- Explicitly request sound
+                          sound: 'default',
                       },
                       trigger: null,
                   });
@@ -288,15 +281,23 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.contentContainer}>
+        
+        {/* --- MODIFIED HEADER WITH SETTINGS --- */}
         <View style={styles.headerRow}>
             <Text style={styles.header}>My List</Text>
-            <View style={{flexDirection: 'row', gap: 15}}>
+            <View style={{flexDirection: 'row', gap: 15, alignItems: 'center'}}>
+              
+              {/* ⚙️ SETTINGS BUTTON (Goes to /settings page) */}
+              <TouchableOpacity onPress={() => router.push('/settings')}>
+                  <Text style={{fontSize: 24}}>⚙️</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity onPress={logout}><Text style={{color:'blue'}}>Logout</Text></TouchableOpacity>
               <TouchableOpacity onPress={deleteAccount}><Text style={{color:'red'}}>Delete</Text></TouchableOpacity>
             </View>
         </View>
         
-        {/* VISUAL DEBUGGER - Shows real-time updates */}
+        {/* VISUAL DEBUGGER */}
         <Text style={styles.subHeader}>
           {isTracking ? "🟢 Active & Watching Movement" : "🌙 Sleeping"}
           {location && ` • 📍 Loc OK`}
