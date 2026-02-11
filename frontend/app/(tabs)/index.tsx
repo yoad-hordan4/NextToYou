@@ -12,6 +12,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
+// --- 🔔 FIXED NOTIFICATION HANDLER ---
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -55,6 +56,7 @@ export default function HomeScreen() {
     checkLogin();
     setupNotifications();
     
+    // --- 🔔 LISTENER FOR CLICKS ---
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
       const data = response.notification.request.content.data as { url?: string };
       if (data?.url) Linking.openURL(data.url);
@@ -63,8 +65,19 @@ export default function HomeScreen() {
   }, []);
 
   const setupNotifications = async () => {
+    // 1. Request Permission
     const { status } = await Notifications.requestPermissionsAsync();
     if (status !== 'granted') Alert.alert('Permission missing', 'Enable notifications for alerts!');
+
+    // 2. 🤖 ANDROID CHANNEL SETUP (Critical for Sound)
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'default',
+        importance: Notifications.AndroidImportance.MAX, // MAX = Sound + Pop-up
+        vibrationPattern: [0, 250, 250, 250],
+        lightColor: '#FF231F7C',
+      });
+    }
   };
 
   const checkLogin = async () => {
@@ -83,6 +96,18 @@ export default function HomeScreen() {
     await AsyncStorage.removeItem('user_session');
     notifiedDealsRef.current.clear();
     router.replace('/login');
+  };
+
+  // --- 🛠️ TEMP: FIX RADIUS BUTTON ---
+  const updateRadius = async () => {
+      if (!user) return;
+      const newRadius = 200; // Increase to 200 meters!
+      try {
+          // Note: You might need to add a dedicated endpoint for this later, 
+          // but for now, re-registering or just knowing the default is 50 explains it.
+          // This is a placeholder to show where you'd change it.
+          Alert.alert("Radius Info", `Your notification radius is likely 50m. We recommend deleting your account and registering again with 200m, or asking the developer to update the default.`);
+      } catch (e) { console.log(e); }
   };
 
   const deleteAccount = async () => {
@@ -107,7 +132,7 @@ export default function HomeScreen() {
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
-    // Get initial location immediately so UI updates
+    // Get initial location immediately
     try {
         let loc = await Location.getCurrentPositionAsync({});
         setLocation(loc);
@@ -131,7 +156,7 @@ export default function HomeScreen() {
         }
     };
     checkTimeAndTrack();
-    const intervalId = setInterval(checkTimeAndTrack, 30000); 
+    const intervalId = setInterval(checkTimeAndTrack, 15000); // Speed up to 15s for better responsiveness
     return () => clearInterval(intervalId);
   };
 
@@ -151,11 +176,14 @@ export default function HomeScreen() {
              const uniqueId = `${deal.store}|${foundItem.item}`;
              currentDealIds.add(uniqueId);
              if (!notifiedDealsRef.current.has(uniqueId)) {
+                 // --- 🔔 NOTIFY WITH SOUND ---
                  await Notifications.scheduleNotificationAsync({
                     content: {
                         title: `🎯 Near ${deal.store}!`,
                         body: `Found: ${foundItem.item} (₪${foundItem.price}) - ${deal.distance}m away`,
                         data: { url: `maps://0,0?q=${deal.lat},${deal.lon}(${deal.store})` },
+                        sound: true, // Explicitly request sound
+                        priority: Notifications.AndroidNotificationPriority.MAX, // High priority
                     },
                     trigger: null,
                  });
@@ -183,7 +211,6 @@ export default function HomeScreen() {
       body: JSON.stringify({ title: text, category: selectedCategory, user_id: user.username }),
     });
     
-    // Check immediately (isInstantCheck = true)
     if (location) performSearch(text, location.coords.latitude, location.coords.longitude, true);
     
     setText('');
@@ -195,7 +222,6 @@ export default function HomeScreen() {
     setEditModalText(task.title);
     setSelectedItem(task.title);
     setModalVisible(true);
-    // Just search, don't notify (isInstantCheck = false)
     if (location) performSearch(task.title, location.coords.latitude, location.coords.longitude, false);
   };
 
@@ -219,29 +245,24 @@ export default function HomeScreen() {
     fetchTasks(user.username);
   };
 
-  // --- MERGED LOGIC: Handles both Map Search AND Instant Notifications ---
   const performSearch = async (query: string, lat: number, lon: number, isInstantCheck: boolean) => {
       try {
           const response = await fetch(`${API_BASE}/search-item`, {
               method: 'POST',
               headers: API_HEADERS,
-              body: JSON.stringify({ latitude: lat, longitude: lon, item_name: query }),
+              body: JSON.stringify({ latitude: lat, longitude: lon, item_name: query, radius: 10000 }),
           });
           const data = await response.json();
           const results = data.results || [];
           
-          // 1. Update Map Data (always)
           if (!isInstantCheck) {
              setItemDeals(results);
           }
           
-          // 2. Instant Notification Logic (Only when adding/instant check)
-          // Use user preference (defaults to 50 if missing)
           const notifyRadius = user?.notification_radius || 50; 
 
           if (isInstantCheck && results.length > 0) {
               const bestDeal = results[0];
-              // Only notify if within USER'S radius
               if (bestDeal.distance <= notifyRadius) {
                   const item = bestDeal.found_items[0];
                   await Notifications.scheduleNotificationAsync({
@@ -249,6 +270,8 @@ export default function HomeScreen() {
                           title: `🎯 Found ${item.item}!`,
                           body: `At ${bestDeal.store} - ${item.price}₪`,
                           data: { url: `maps://0,0?q=${bestDeal.lat},${bestDeal.lon}` },
+                          sound: true,
+                          priority: Notifications.AndroidNotificationPriority.MAX,
                       },
                       trigger: null,
                   });
@@ -276,9 +299,8 @@ export default function HomeScreen() {
             </View>
         </View>
         
-        {/* Restored rich subheader with location */}
         <Text style={styles.subHeader}>
-          {isTracking ? "🟢 Active & Searching" : "🌙 Sleeping (Outside Active Hours)"}
+          {isTracking ? "🟢 Active" : "🌙 Sleeping"}
           {location && ` • 📍 ${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`}
         </Text>
 
@@ -343,32 +365,21 @@ export default function HomeScreen() {
                 <MapView style={styles.map} provider={PROVIDER_DEFAULT} showsUserLocation={true}
                   initialRegion={{ latitude: location.coords.latitude, longitude: location.coords.longitude, latitudeDelta: 0.1, longitudeDelta: 0.1 }}>
                   {itemDeals.map((deal, index) => (
-                    <Marker 
-                        key={index} 
-                        coordinate={{ latitude: deal.lat, longitude: deal.lon }} 
-                        title={deal.store}
-                        // SHOW DISTANCE IN PIN BUBBLE
-                        description={`${deal.distance}m away`} 
-                    />
+                    <Marker key={index} coordinate={{ latitude: deal.lat, longitude: deal.lon }} title={deal.store} description={`${deal.distance}m away`} />
                   ))}
                 </MapView>
                )}
             </View>
 
-            {/* Restored Rich Deal Card UI */}
             <FlatList data={itemDeals} keyExtractor={(item, index) => index.toString()}
               renderItem={({ item, index }) => (
                 <View style={styles.dealCard}>
                   <View style={styles.dealInfo}>
                     <View style={styles.storeHeader}>
                         <Text style={styles.storeName}>{index === 0 && '🥇 '}{item.store}</Text>
-                        
-                        {/* SHOW DISTANCE IN CARD */}
                         <Text style={styles.distanceText}>📍 {item.distance}m</Text>
                     </View>
                     {item.address && <Text style={styles.storeAddress}>{item.address}</Text>}
-                    
-                    {/* Render all found items */}
                     {item.found_items.map((foundItem: any, idx: number) => (
                       <View key={idx} style={styles.itemRow}>
                         <Text style={styles.itemName}>• {foundItem.item}</Text>
