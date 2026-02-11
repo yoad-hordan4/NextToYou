@@ -12,7 +12,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-// --- 🔔 FIXED NOTIFICATION HANDLER ---
+// --- 🔔 NOTIFICATION HANDLER ---
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -44,6 +44,7 @@ export default function HomeScreen() {
   // Location
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [isTracking, setIsTracking] = useState(false);
+  const [lastCheckTime, setLastCheckTime] = useState<string>('Never');
   
   // Map Modal
   const [modalVisible, setModalVisible] = useState(false);
@@ -51,29 +52,32 @@ export default function HomeScreen() {
   const [itemDeals, setItemDeals] = useState<any[]>([]);
   
   const notifiedDealsRef = useRef<Set<string>>(new Set());
+  
+  // Ref to hold the location subscription so we can stop it later
+  const locationSubscription = useRef<Location.LocationSubscription | null>(null);
 
   useEffect(() => {
     checkLogin();
     setupNotifications();
     
-    // --- 🔔 LISTENER FOR CLICKS ---
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
       const data = response.notification.request.content.data as { url?: string };
       if (data?.url) Linking.openURL(data.url);
     });
-    return () => subscription.remove();
+    return () => {
+        subscription.remove();
+        stopTracking(); // Cleanup on unmount
+    };
   }, []);
 
   const setupNotifications = async () => {
-    // 1. Request Permission
     const { status } = await Notifications.requestPermissionsAsync();
     if (status !== 'granted') Alert.alert('Permission missing', 'Enable notifications for alerts!');
 
-    // 2. 🤖 ANDROID CHANNEL SETUP (Critical for Sound)
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync('default', {
-        name: 'default',
-        importance: Notifications.AndroidImportance.MAX, // MAX = Sound + Pop-up
+        name: 'Proximity Alerts',
+        importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#FF231F7C',
       });
@@ -93,21 +97,10 @@ export default function HomeScreen() {
   };
 
   const logout = async () => {
+    stopTracking();
     await AsyncStorage.removeItem('user_session');
     notifiedDealsRef.current.clear();
     router.replace('/login');
-  };
-
-  // --- 🛠️ TEMP: FIX RADIUS BUTTON ---
-  const updateRadius = async () => {
-      if (!user) return;
-      const newRadius = 200; // Increase to 200 meters!
-      try {
-          // Note: You might need to add a dedicated endpoint for this later, 
-          // but for now, re-registering or just knowing the default is 50 explains it.
-          // This is a placeholder to show where you'd change it.
-          Alert.alert("Radius Info", `Your notification radius is likely 50m. We recommend deleting your account and registering again with 200m, or asking the developer to update the default.`);
-      } catch (e) { console.log(e); }
   };
 
   const deleteAccount = async () => {
@@ -128,36 +121,52 @@ export default function HomeScreen() {
     ]);
   };
 
+  const stopTracking = () => {
+      if (locationSubscription.current) {
+          locationSubscription.current.remove();
+          locationSubscription.current = null;
+      }
+      setIsTracking(false);
+  };
+
+  // --- 🚀 NEW: REAL-TIME MOVEMENT TRACKING ---
   const startSmartTracking = async (userData: any) => {
+    // 1. Stop any old trackers first
+    stopTracking();
+
     let { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') return;
 
-    // Get initial location immediately
+    // 2. Check "Active Hours" before starting
+    const currentHour = new Date().getHours();
+    const { active_start_hour, active_end_hour } = userData;
+    const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
+
+    if (!isActiveTime) {
+        setIsTracking(false);
+        return; // Don't start tracking if outside hours
+    }
+
+    setIsTracking(true);
+
+    // 3. Start "Watching" (Triggers every 10 meters)
     try {
-        let loc = await Location.getCurrentPositionAsync({});
-        setLocation(loc);
-    } catch (e) { console.log("Initial location error", e); }
-
-    const checkTimeAndTrack = async () => {
-        const session = await AsyncStorage.getItem('user_session');
-        if (!session) { setIsTracking(false); return; }
-
-        const currentHour = new Date().getHours();
-        const { active_start_hour, active_end_hour } = userData;
-        const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
-
-        if (isActiveTime) {
-            setIsTracking(true);
-            let loc = await Location.getCurrentPositionAsync({});
-            setLocation(loc);
-            checkProximity(loc.coords.latitude, loc.coords.longitude, userData.username);
-        } else {
-            setIsTracking(false);
-        }
-    };
-    checkTimeAndTrack();
-    const intervalId = setInterval(checkTimeAndTrack, 15000); // Speed up to 15s for better responsiveness
-    return () => clearInterval(intervalId);
+        const sub = await Location.watchPositionAsync(
+            {
+                accuracy: Location.Accuracy.High,
+                distanceInterval: 10, // Update every 10 meters moved
+            },
+            (newLoc) => {
+                // This code runs AUTOMATICALLY whenever you move 10m
+                setLocation(newLoc);
+                setLastCheckTime(new Date().toLocaleTimeString());
+                checkProximity(newLoc.coords.latitude, newLoc.coords.longitude, userData.username);
+            }
+        );
+        locationSubscription.current = sub;
+    } catch (e) {
+        console.log("Error starting watchPosition:", e);
+    }
   };
 
   const checkProximity = async (lat: number, lon: number, userId: string) => {
@@ -175,15 +184,15 @@ export default function HomeScreen() {
         for (const foundItem of deal.found_items) {
              const uniqueId = `${deal.store}|${foundItem.item}`;
              currentDealIds.add(uniqueId);
+             
              if (!notifiedDealsRef.current.has(uniqueId)) {
-                 // --- 🔔 NOTIFY WITH SOUND ---
                  await Notifications.scheduleNotificationAsync({
                     content: {
                         title: `🎯 Near ${deal.store}!`,
                         body: `Found: ${foundItem.item} (₪${foundItem.price}) - ${deal.distance}m away`,
                         data: { url: `maps://0,0?q=${deal.lat},${deal.lon}(${deal.store})` },
-                        sound: true, // Explicitly request sound
-                        priority: Notifications.AndroidNotificationPriority.MAX, // High priority
+                        sound: true, 
+                        priority: Notifications.AndroidNotificationPriority.MAX,
                     },
                     trigger: null,
                  });
@@ -204,15 +213,12 @@ export default function HomeScreen() {
 
   const handleAdd = async () => {
     if (!text || !user) return;
-    
     await fetch(`${API_BASE}/tasks`, {
       method: 'POST',
       headers: API_HEADERS,
       body: JSON.stringify({ title: text, category: selectedCategory, user_id: user.username }),
     });
-    
     if (location) performSearch(text, location.coords.latitude, location.coords.longitude, true);
-    
     setText('');
     fetchTasks(user.username);
   };
@@ -255,9 +261,7 @@ export default function HomeScreen() {
           const data = await response.json();
           const results = data.results || [];
           
-          if (!isInstantCheck) {
-             setItemDeals(results);
-          }
+          if (!isInstantCheck) setItemDeals(results);
           
           const notifyRadius = user?.notification_radius || 50; 
 
@@ -299,9 +303,13 @@ export default function HomeScreen() {
             </View>
         </View>
         
+        {/* VISUAL DEBUGGER - Shows real-time updates */}
         <Text style={styles.subHeader}>
-          {isTracking ? "🟢 Active" : "🌙 Sleeping"}
-          {location && ` • 📍 ${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`}
+          {isTracking ? "🟢 Active & Watching Movement" : "🌙 Sleeping"}
+          {location && ` • 📍 Loc OK`}
+        </Text>
+        <Text style={{fontSize: 10, color: '#999', marginBottom: 15, textAlign:'center'}}>
+            Updated: {lastCheckTime} | Radius: {user?.notification_radius || 50}m
         </Text>
 
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -365,7 +373,12 @@ export default function HomeScreen() {
                 <MapView style={styles.map} provider={PROVIDER_DEFAULT} showsUserLocation={true}
                   initialRegion={{ latitude: location.coords.latitude, longitude: location.coords.longitude, latitudeDelta: 0.1, longitudeDelta: 0.1 }}>
                   {itemDeals.map((deal, index) => (
-                    <Marker key={index} coordinate={{ latitude: deal.lat, longitude: deal.lon }} title={deal.store} description={`${deal.distance}m away`} />
+                    <Marker 
+                        key={index} 
+                        coordinate={{ latitude: deal.lat, longitude: deal.lon }} 
+                        title={deal.store}
+                        description={`${deal.distance}m away`} 
+                    />
                   ))}
                 </MapView>
                )}
@@ -405,7 +418,7 @@ const styles = StyleSheet.create({
   contentContainer: { flex: 1, padding: 20 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
   header: { fontSize: 32, fontWeight: '800', color: '#333' },
-  subHeader: { color: '#666', marginBottom: 20, marginTop: 5, fontSize: 12 },
+  subHeader: { color: '#666', marginBottom: 2, marginTop: 5, fontSize: 12 },
   inputCard: { backgroundColor: 'white', padding: 15, borderRadius: 15, marginBottom: 15, elevation: 3 },
   inputWrapper: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   input: { flex: 1, backgroundColor: '#F9F9F9', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#eee' },
