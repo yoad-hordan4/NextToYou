@@ -145,8 +145,8 @@ STORES_DB = [
     {
         "id": "9",
         "name": "Yesh Dizengoff Square",
-        "lat": 32.0740,
-        "lon": 34.7740,
+        "lat": 32.0775, 
+        "lon": 34.7737,
         "address": "Dizengoff Square, Tel Aviv",
         "inventory": [
             {"item": "milk", "price": 7.50, "brand": "Tnuva 3%"},
