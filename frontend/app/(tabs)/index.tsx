@@ -105,7 +105,10 @@ export default function HomeScreen() {
 
   const startSmartTracking = async (userData: any) => {
     let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return;
+    if (status !== 'granted') {
+      Alert.alert("Location Required", "Please enable location to use this app");
+      return;
+    }
 
     const checkTimeAndTrack = async () => {
         const session = await AsyncStorage.getItem('user_session');
@@ -119,11 +122,22 @@ export default function HomeScreen() {
             setIsTracking(true);
             let loc = await Location.getCurrentPositionAsync({});
             setLocation(loc);
+            console.log(`[DEBUG] Location updated: ${loc.coords.latitude}, ${loc.coords.longitude}`);
             checkProximity(loc.coords.latitude, loc.coords.longitude, userData.username);
         } else {
             setIsTracking(false);
         }
     };
+    
+    // Get initial location
+    try {
+      let loc = await Location.getCurrentPositionAsync({});
+      setLocation(loc);
+      console.log(`[DEBUG] Initial location: ${loc.coords.latitude}, ${loc.coords.longitude}`);
+    } catch (e) {
+      console.log("[ERROR] Failed to get location:", e);
+    }
+    
     checkTimeAndTrack();
     const intervalId = setInterval(checkTimeAndTrack, 30000); 
     return () => clearInterval(intervalId);
@@ -131,12 +145,15 @@ export default function HomeScreen() {
 
   const checkProximity = async (lat: number, lon: number, userId: string) => {
     try {
+      console.log(`[DEBUG] Checking proximity at ${lat}, ${lon}`);
       const response = await fetch(`${API_BASE}/check-proximity`, {
         method: 'POST',
         headers: API_HEADERS,
         body: JSON.stringify({ latitude: lat, longitude: lon, user_id: userId }),
       });
       const data = await response.json();
+      console.log(`[DEBUG] Proximity response:`, data);
+      
       const currentDeals = data.nearby || [];
       const currentDealIds = new Set<string>();
       
@@ -145,10 +162,11 @@ export default function HomeScreen() {
              const uniqueId = `${deal.store}|${foundItem.item}`;
              currentDealIds.add(uniqueId);
              if (!notifiedDealsRef.current.has(uniqueId)) {
+                 console.log(`[DEBUG] Sending notification for ${uniqueId}`);
                  await Notifications.scheduleNotificationAsync({
                     content: {
                         title: `🎯 Near ${deal.store}!`,
-                        body: `Found: ${foundItem.item} (₪${foundItem.price})`,
+                        body: `Found: ${foundItem.item} (₪${foundItem.price}) - ${deal.distance}m away`,
                         data: { url: `maps://0,0?q=${deal.lat},${deal.lon}(${deal.store})` },
                     },
                     trigger: null,
@@ -157,7 +175,9 @@ export default function HomeScreen() {
         }
       }
       notifiedDealsRef.current = currentDealIds;
-    } catch (e) { console.log("Proximity error", e); }
+    } catch (e) { 
+      console.log("[ERROR] Proximity error", e); 
+    }
   };
 
   const fetchTasks = async (username: string) => {
@@ -170,14 +190,54 @@ export default function HomeScreen() {
 
   const handleAdd = async () => {
     if (!text || !user) return;
+    
+    console.log(`[DEBUG] Adding task: ${text}`);
+    
     await fetch(`${API_BASE}/tasks`, {
       method: 'POST',
       headers: API_HEADERS,
       body: JSON.stringify({ title: text, category: selectedCategory, user_id: user.username }),
     });
-    if (location) performSearch(text, location.coords.latitude, location.coords.longitude, true);
+    
+    // Immediately check if nearby when adding
+    if (location) {
+      console.log(`[DEBUG] Checking for newly added item immediately`);
+      await performSearchAndNotify(text, location.coords.latitude, location.coords.longitude);
+    }
+    
     setText('');
     fetchTasks(user.username);
+  };
+
+  const performSearchAndNotify = async (query: string, lat: number, lon: number) => {
+    try {
+        const response = await fetch(`${API_BASE}/search-item`, {
+            method: 'POST',
+            headers: API_HEADERS,
+            body: JSON.stringify({ latitude: lat, longitude: lon, item_name: query, radius: 10000 }),
+        });
+        const data = await response.json();
+        const results = data.results || [];
+        
+        console.log(`[DEBUG] Search results for "${query}":`, results.length);
+        
+        // Send notification for any nearby results
+        if (results.length > 0) {
+            const nearestStore = results[0];
+            const item = nearestStore.found_items[0];
+            
+            await Notifications.scheduleNotificationAsync({
+                content: {
+                    title: `✨ Found "${query}"!`,
+                    body: `${nearestStore.store} has it for ₪${item.price} - ${nearestStore.distance}m away`,
+                    data: { url: `maps://0,0?q=${nearestStore.lat},${nearestStore.lon}(${nearestStore.store})` },
+                },
+                trigger: null,
+            });
+        }
+    } catch (e) { 
+      console.log("[ERROR] Search and notify error", e); 
+    }
   };
 
   const startEdit = (task: Task) => {
@@ -185,20 +245,24 @@ export default function HomeScreen() {
     setEditModalText(task.title);
     setSelectedItem(task.title);
     setModalVisible(true);
-    if (location) performSearch(task.title, location.coords.latitude, location.coords.longitude, false);
+    if (location) performSearch(task.title, location.coords.latitude, location.coords.longitude);
   };
 
   const saveEditInModal = async () => {
     if (!editingTaskId || !editModalText || !user) return;
-    setEditingTaskId(null);
+    
     await fetch(`${API_BASE}/tasks/${editingTaskId}`, {
         method: 'PUT',
         headers: API_HEADERS,
         body: JSON.stringify({ title: editModalText }),
     });
+    
     fetchTasks(user.username);
     setSelectedItem(editModalText);
-    if (location) performSearch(editModalText, location.coords.latitude, location.coords.longitude, false);
+    setEditingTaskId(null);
+    
+    if (location) performSearch(editModalText, location.coords.latitude, location.coords.longitude);
+    
     Alert.alert("Updated!", "Item updated and map refreshed.");
   };
 
@@ -208,37 +272,40 @@ export default function HomeScreen() {
     fetchTasks(user.username);
   };
 
-  const performSearch = async (query: string, lat: number, lon: number, isInstantCheck: boolean) => {
+  const performSearch = async (query: string, lat: number, lon: number) => {
       try {
+          console.log(`[DEBUG] Performing search for "${query}" at ${lat}, ${lon}`);
+          
           const response = await fetch(`${API_BASE}/search-item`, {
               method: 'POST',
               headers: API_HEADERS,
               body: JSON.stringify({ latitude: lat, longitude: lon, item_name: query, radius: 10000 }),
           });
+          
           const data = await response.json();
           const results = data.results || [];
-          if (!isInstantCheck) setItemDeals(results);
           
-          if (isInstantCheck && results.length > 0 && results[0].distance < 500) {
-              const item = results[0].found_items[0];
-              await Notifications.scheduleNotificationAsync({
-                  content: {
-                      title: `🎯 Found ${item.item}!`,
-                      body: `At ${results[0].store} - ₪${item.price}`,
-                      data: { url: `maps://0,0?q=${results[0].lat},${results[0].lon}(${results[0].store})` },
-                  },
-                  trigger: null,
-              });
-          }
-      } catch (e) { console.log("Search error", e); }
+          console.log(`[DEBUG] Got ${results.length} results`);
+          console.log(`[DEBUG] Results:`, JSON.stringify(results, null, 2));
+          
+          setItemDeals(results);
+      } catch (e) { 
+        console.log("[ERROR] Search error", e); 
+      }
   };
 
   const openItemMenu = (itemTitle: string) => {
-    if (!location) { alert("Locating you..."); return; }
+    if (!location) { 
+      alert("Getting your location..."); 
+      return; 
+    }
+    
+    console.log(`[DEBUG] Opening item menu for: ${itemTitle}`);
+    
     setEditingTaskId(null);
     setSelectedItem(itemTitle);
     setModalVisible(true);
-    performSearch(itemTitle, location.coords.latitude, location.coords.longitude, false);
+    performSearch(itemTitle, location.coords.latitude, location.coords.longitude);
   };
 
   return (
@@ -251,7 +318,10 @@ export default function HomeScreen() {
               <TouchableOpacity onPress={deleteAccount}><Text style={{color:'red'}}>Delete</Text></TouchableOpacity>
             </View>
         </View>
-        <Text style={styles.subHeader}>{isTracking ? "🟢 Active & Searching" : "🌙 Sleeping (Outside Active Hours)"}</Text>
+        <Text style={styles.subHeader}>
+          {isTracking ? "🟢 Active & Searching" : "🌙 Sleeping (Outside Active Hours)"}
+          {location && ` • 📍 ${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`}
+        </Text>
 
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={styles.inputCard}>
@@ -300,33 +370,65 @@ export default function HomeScreen() {
                         </TouchableOpacity>
                     </View>
                  </View>
-              ) : ( <Text style={styles.modalTitle}>Searching: {selectedItem}</Text> )}
+              ) : ( 
+                <View>
+                  <Text style={styles.modalTitle}>Searching: {selectedItem}</Text>
+                  <Text style={styles.modalSubtitle}>{itemDeals.length} location{itemDeals.length !== 1 ? 's' : ''} found</Text>
+                </View>
+              )}
               <Button title="Close" onPress={() => setModalVisible(false)} />
             </View>
 
             <View style={styles.mapContainer}>
-               {location && (
-                <MapView style={styles.map} provider={PROVIDER_DEFAULT} showsUserLocation={true}
-                  initialRegion={{ latitude: location.coords.latitude, longitude: location.coords.longitude, latitudeDelta: 0.1, longitudeDelta: 0.1 }}>
+               {location && itemDeals.length > 0 && (
+                <MapView 
+                  style={styles.map} 
+                  provider={PROVIDER_DEFAULT} 
+                  showsUserLocation={true}
+                  initialRegion={{ 
+                    latitude: location.coords.latitude, 
+                    longitude: location.coords.longitude, 
+                    latitudeDelta: 0.05, 
+                    longitudeDelta: 0.05 
+                  }}
+                >
                   {itemDeals.map((deal, index) => (
                     <Marker 
-                      key={index} 
+                      key={`${deal.store_id}-${index}`}
                       coordinate={{ latitude: deal.lat, longitude: deal.lon }} 
                       title={deal.store}
                       description={`${deal.distance}m away • ${deal.found_items.length} item(s)`}
+                      pinColor={index === 0 ? 'red' : 'orange'}
                     />
                   ))}
                 </MapView>
                )}
+               {location && itemDeals.length === 0 && (
+                 <View style={styles.noResults}>
+                   <Text style={styles.noResultsText}>No stores found nearby</Text>
+                   <Text style={styles.noResultsSubtext}>Try searching for a different item</Text>
+                 </View>
+               )}
             </View>
 
-            <FlatList data={itemDeals} keyExtractor={(item, index) => index.toString()}
-              renderItem={({ item }) => (
+            <FlatList 
+              data={itemDeals} 
+              keyExtractor={(item, index) => `${item.store_id}-${index}`}
+              ListEmptyComponent={
+                <View style={styles.emptyList}>
+                  <Text style={styles.emptyText}>No results found</Text>
+                </View>
+              }
+              renderItem={({ item, index }) => (
                 <View style={styles.dealCard}>
                   <View style={styles.dealInfo}>
-                    <Text style={styles.storeName}>{item.store}</Text>
+                    <View style={styles.storeHeader}>
+                      <Text style={styles.storeName}>
+                        {index === 0 && '🥇 '}{item.store}
+                      </Text>
+                      <Text style={styles.distanceText}>📍 {item.distance}m</Text>
+                    </View>
                     <Text style={styles.storeAddress}>{item.address}</Text>
-                    <Text style={styles.distanceText}>📍 {item.distance}m away</Text>
                     {item.found_items.map((foundItem: any, idx: number) => (
                       <View key={idx} style={styles.itemRow}>
                         <Text style={styles.itemName}>• {foundItem.item}</Text>
@@ -354,7 +456,7 @@ const styles = StyleSheet.create({
   contentContainer: { flex: 1, padding: 20 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
   header: { fontSize: 32, fontWeight: '800', color: '#333' },
-  subHeader: { color: '#666', marginBottom: 20, marginTop: 5 },
+  subHeader: { color: '#666', marginBottom: 20, marginTop: 5, fontSize: 12 },
   inputCard: { backgroundColor: 'white', padding: 15, borderRadius: 15, marginBottom: 15, elevation: 3 },
   inputWrapper: { flexDirection: 'row', gap: 10, alignItems: 'center' },
   input: { flex: 1, backgroundColor: '#F9F9F9', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#eee' },
@@ -371,21 +473,28 @@ const styles = StyleSheet.create({
   modalContainer: { flex: 1, backgroundColor: '#fff' },
   modalHeader: { padding: 20, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: 'white', zIndex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   modalTitle: { fontSize: 20, fontWeight: 'bold' },
+  modalSubtitle: { fontSize: 12, color: '#666', marginTop: 2 },
   editHeaderContainer: { flex: 1, marginRight: 10 },
   editLabel: { fontSize: 12, color: '#666', marginBottom: 4 },
   editRow: { flexDirection: 'row', gap: 10 },
   editInput: { flex: 1, backgroundColor: '#F5F5F5', padding: 8, borderRadius: 8, borderWidth: 1, borderColor: '#ddd' },
   saveBtn: { backgroundColor: '#007AFF', padding: 10, borderRadius: 8, justifyContent: 'center' },
-  mapContainer: { height: 300, width: '100%', marginBottom: 10 },
+  mapContainer: { height: 300, width: '100%', marginBottom: 10, backgroundColor: '#f0f0f0' },
   map: { width: '100%', height: '100%' },
+  noResults: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  noResultsText: { fontSize: 16, fontWeight: '600', color: '#666' },
+  noResultsSubtext: { fontSize: 12, color: '#999', marginTop: 4 },
   dealCard: { flexDirection: 'row', justifyContent: 'space-between', padding: 15, borderBottomWidth: 1, borderBottomColor: '#eee', alignItems: 'center' },
   dealInfo: { flex: 1 },
-  storeName: { fontSize: 18, fontWeight: '700', color: '#333', marginBottom: 4 },
-  storeAddress: { fontSize: 12, color: '#888', marginBottom: 4 },
-  distanceText: { fontSize: 12, color: '#666', marginBottom: 8 },
+  storeHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
+  storeName: { fontSize: 18, fontWeight: '700', color: '#333' },
+  storeAddress: { fontSize: 12, color: '#888', marginBottom: 8 },
+  distanceText: { fontSize: 12, color: '#007AFF', fontWeight: '600' },
   itemRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, paddingLeft: 8 },
-  itemName: { fontSize: 14, color: '#555' },
-  priceTag: { color: '#22C55E', fontWeight: 'bold', fontSize: 16 },
+  itemName: { fontSize: 14, color: '#555', flex: 1 },
+  priceTag: { color: '#22C55E', fontWeight: 'bold', fontSize: 16, marginLeft: 10 },
   goButton: { backgroundColor: '#007AFF', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 25 },
-  goButtonText: { color: 'white', fontWeight: 'bold', fontSize: 14 }
+  goButtonText: { color: 'white', fontWeight: 'bold', fontSize: 14 },
+  emptyList: { padding: 40, alignItems: 'center' },
+  emptyText: { color: '#999', fontSize: 14 }
 });

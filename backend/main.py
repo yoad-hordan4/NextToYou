@@ -145,25 +145,43 @@ def delete_task(task_id: str):
 @app.post("/check-proximity")
 def check_proximity(loc: LocationUpdate):
     try:
+        print(f"[DEBUG] Check proximity for user: {loc.user_id} at ({loc.latitude}, {loc.longitude})")
+        
         user = users_db.get(loc.user_id)
-        radius = user.get('notification_radius', 50) if user else 50
+        radius = user.get('notification_radius', 500) if user else 500
+        
+        print(f"[DEBUG] User radius: {radius}m")
 
         user_tasks = [t['title'] for t in tasks_db if t.get('user_id') == loc.user_id and not t.get('is_completed', False)]
+        
+        print(f"[DEBUG] User tasks: {user_tasks}")
         
         if not user_tasks:
             return {"message": "No active tasks.", "nearby": []}
 
         deals = find_nearby_deals(loc.latitude, loc.longitude, user_tasks, radius=radius)
+        
+        print(f"[DEBUG] Found {len(deals)} deals")
+        
         return {"nearby": deals}
     except Exception as e:
-        print(f"Proximity check error: {e}")
+        print(f"[ERROR] Proximity check error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error checking proximity: {str(e)}")
 
 @app.post("/search-item")
 def search_item(search: ItemSearch):
     try:
+        print(f"[DEBUG] Search for '{search.item_name}' at ({search.latitude}, {search.longitude}) within {search.radius}m")
+        
         deals = find_nearby_deals(search.latitude, search.longitude, [search.item_name], radius=search.radius)
+        
+        print(f"[DEBUG] Search found {len(deals)} results")
+        
         return {"results": deals}
     except Exception as e:
-        print(f"Search item error: {e}")
+        print(f"[ERROR] Search item error: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error searching item: {str(e)}")

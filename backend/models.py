@@ -1,27 +1,23 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional
 
 class User(BaseModel):
     username: str
     password: str
     active_start_hour: int = 8
     active_end_hour: int = 22
-    notification_radius: int = 50
+    notification_radius: int = 500  # in meters
 
 class LoginRequest(BaseModel):
     username: str
     password: str
 
-class Category(BaseModel):
-    name: str
-    color: str
-
 class TaskItem(BaseModel):
     id: Optional[str] = None
     title: str
-    category: str = "General"
-    is_completed: bool = False
+    category: str
     user_id: str
+    is_completed: bool = False
 
 class LocationUpdate(BaseModel):
     latitude: float
