@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from uuid import uuid4
 from pydantic import BaseModel 
+from models import UserUpdate
+
 
 from models import TaskItem, LocationUpdate, User, LoginRequest
 from store_logic import find_nearby_deals
@@ -98,6 +100,54 @@ def delete_account(req: DeleteRequest):
     save_data(TASKS_FILE, tasks_db)
 
     return {"message": "Account deleted"}
+
+
+@app.put("/update-account")
+def update_account(req: UserUpdate):
+    global tasks_db
+    
+    # 1. Verify Current Credentials
+    if req.current_username not in users_db:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user = users_db[req.current_username]
+    if user["password"] != req.current_password:
+        raise HTTPException(status_code=401, detail="Wrong password")
+
+    # 2. Handle Username Change (The Tricky Part)
+    target_username = req.current_username
+    if req.new_username and req.new_username != req.current_username:
+        if req.new_username in users_db:
+            raise HTTPException(status_code=400, detail="New username already taken")
+        
+        # Create new entry
+        users_db[req.new_username] = users_db[req.current_username].copy()
+        users_db[req.new_username]["username"] = req.new_username
+        
+        # Delete old entry
+        del users_db[req.current_username]
+        
+        # Update all tasks to point to new username
+        for task in tasks_db:
+            if task.get("user_id") == req.current_username:
+                task["user_id"] = req.new_username
+        
+        save_data(TASKS_FILE, tasks_db)
+        target_username = req.new_username
+
+    # 3. Update Other Fields
+    if req.new_password:
+        users_db[target_username]["password"] = req.new_password
+    if req.active_start_hour is not None:
+        users_db[target_username]["active_start_hour"] = req.active_start_hour
+    if req.active_end_hour is not None:
+        users_db[target_username]["active_end_hour"] = req.active_end_hour
+    if req.notification_radius is not None:
+        users_db[target_username]["notification_radius"] = req.notification_radius
+
+    save_data(USERS_FILE, users_db)
+    
+    return {"message": "Updated successfully", "user": users_db[target_username]}
 
 # --- TASK ENDPOINTS ---
 @app.get("/tasks/{user_id}")
