@@ -1,27 +1,49 @@
-# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
 node_modules/
+.pnp
+.pnp.js
+
+# testing
+coverage/
+
+# production
+build/
+dist/
+
+# misc
+.DS_Store
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Expo
 .expo/
+.expo-shared/
 dist/
 web-build/
-expo-env.d.ts
 
 # Native
-.kotlin/
 *.orig.*
 *.jks
 *.p8
 *.p12
 *.key
 *.mobileprovision
+*.ipa
+*.apk
 
 # Metro
 .metro-health-check*
 
-# debug
+# Debug
 npm-debug.*
 yarn-debug.*
 yarn-error.*
@@ -32,12 +54,38 @@ yarn-error.*
 
 # local env files
 .env*.local
-.env
-# typescript
+
+# Typescript
 *.tsbuildinfo
 
-app-example
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
 
-# generated native folders
-/ios
-/android
+# Backend database files
+backend/*.json
+backend/users_db.json
+backend/tasks_db.json
+backend/geofence_state.json
+
+# ⚠️ CRITICAL: DO NOT COMMIT API KEYS
+frontend/constants/apiKeys.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db

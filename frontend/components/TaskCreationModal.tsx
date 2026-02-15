@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, Alert, Platform } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, Modal, Alert, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
@@ -146,16 +146,14 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
           {/* Task Title */}
           <View style={styles.section}>
             <Text style={styles.label}>Task Name</Text>
-            <View style={styles.titleInputContainer}>
-              <input
-                type="text"
-                style={styles.titleInput}
-                placeholder="e.g., Buy milk"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                autoFocus
-              />
-            </View>
+            <TextInput
+              style={styles.titleInput}
+              placeholder="e.g., Buy milk"
+              placeholderTextColor="#999"
+              value={title}
+              onChangeText={setTitle}
+              autoFocus
+            />
           </View>
 
           {/* Category */}
@@ -268,14 +266,10 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
                   </TouchableOpacity>
                 </View>
               )}
-            </View>
-          )}
-
-          {/* Leaving Radius */}
-          {(reminderType === 'leaving_home' || reminderType === 'leaving_work' || reminderType === 'custom_location') && (
-            <View style={styles.section}>
-              <Text style={styles.label}>Trigger Distance (meters)</Text>
-              <Text style={styles.subtitle}>Remind me when I get this far from the location</Text>
+              
+              <Text style={[styles.label, { marginTop: 15 }]}>Trigger Distance</Text>
+              <Text style={styles.subtitle}>Remind me when Im this far from the location</Text>
+              
               <View style={styles.radiusOptions}>
                 {['100', '200', '300', '500'].map(r => (
                   <TouchableOpacity
@@ -292,12 +286,36 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
             </View>
           )}
 
-          {/* Time Settings */}
+          {/* Leaving Home/Work Radius */}
+          {(reminderType === 'leaving_home' || reminderType === 'leaving_work') && (
+            <View style={styles.section}>
+              <Text style={styles.label}>Trigger Distance</Text>
+              <Text style={styles.subtitle}>
+                Remind me when Im this far from {reminderType === 'leaving_home' ? 'home' : 'work'}
+              </Text>
+              
+              <View style={styles.radiusOptions}>
+                {['100', '200', '300', '500'].map(r => (
+                  <TouchableOpacity
+                    key={r}
+                    style={[styles.radiusChip, leavingRadius === r && styles.radiusChipActive]}
+                    onPress={() => setLeavingRadius(r)}
+                  >
+                    <Text style={[styles.radiusText, leavingRadius === r && styles.radiusTextActive]}>
+                      {r}m
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          )}
+
+          {/* Time-based Settings */}
           {reminderType === 'specific_time' && (
             <View style={styles.section}>
               <Text style={styles.label}>Time</Text>
               
-              <TouchableOpacity 
+              <TouchableOpacity
                 style={styles.timeButton}
                 onPress={() => setShowTimePicker(true)}
               >
@@ -308,8 +326,7 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
                 <DateTimePicker
                   value={reminderTime}
                   mode="time"
-                  is24Hour={true}
-                  display="default"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   onChange={(event, selectedDate) => {
                     setShowTimePicker(Platform.OS === 'ios');
                     if (selectedDate) setReminderTime(selectedDate);
@@ -401,18 +418,14 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 8,
   },
-  titleInputContainer: {
+  titleInput: {
     backgroundColor: '#F9F9F9',
-    padding: 12,
+    padding: 15,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#eee',
-  },
-  titleInput: {
     fontSize: 16,
-    outline: 'none',
-    backgroundColor: 'transparent',
-    width: '100%',
+    color: '#333',
   },
   categoryScroll: {
     marginTop: 5,
@@ -467,7 +480,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#666',
     marginBottom: 10,
-    fontFamily: 'monospace',
   },
   googlePlacesInput: {
     backgroundColor: '#F9F9F9',
