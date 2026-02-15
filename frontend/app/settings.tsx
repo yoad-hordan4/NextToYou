@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { API_BASE, API_HEADERS } from '@/constants/config';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
-import { GOOGLE_PLACES_API_KEY } from '../constants/apiKeys';
+
+//import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+//import { GOOGLE_PLACES_API_KEY } from '../constants/apiKeys';
 
 export default function SettingsScreen() {
   const [user, setUser] = useState<any>(null);
@@ -236,25 +237,13 @@ export default function SettingsScreen() {
           </View>
         ) : (
           <View style={styles.locationEmpty}>
-            <GooglePlacesAutocomplete
-              placeholder='Search for home address...'
-              onPress={(data, details = null) => {
-                if (details) {
-                  setHomeLat(details.geometry.location.lat);
-                  setHomeLon(details.geometry.location.lng);
-                  setHomeAddress(data.description);
-                }
-              }}
-              query={{
-                key: GOOGLE_PLACES_API_KEY,
-                language: 'en',
-              }}
-              fetchDetails={true}
-              styles={{
-                textInput: styles.googlePlacesInput,
-                container: { flex: 0 },
-              }}
-            />
+            <TextInput
+                style={styles.googlePlacesInput}
+                placeholder='Enter home address (or use current location)'
+                value={homeAddress}
+                onChangeText={setHomeAddress}
+                multiline
+            />  
             <TouchableOpacity 
               style={styles.locationButton}
               onPress={setCurrentLocationAsHome}
@@ -289,24 +278,12 @@ export default function SettingsScreen() {
           </View>
         ) : (
           <View style={styles.locationEmpty}>
-            <GooglePlacesAutocomplete
-              placeholder='Search for work address...'
-              onPress={(data, details = null) => {
-                if (details) {
-                  setWorkLat(details.geometry.location.lat);
-                  setWorkLon(details.geometry.location.lng);
-                  setWorkAddress(data.description);
-                }
-              }}
-              query={{
-                key: GOOGLE_PLACES_API_KEY,
-                language: 'en',
-              }}
-              fetchDetails={true}
-              styles={{
-                textInput: styles.googlePlacesInput,
-                container: { flex: 0 },
-              }}
+            <TextInput
+                style={styles.googlePlacesInput}
+                placeholder='Enter home address (or use current location)'
+                value={homeAddress}
+                onChangeText={setHomeAddress}
+                multiline
             />
             <TouchableOpacity 
               style={styles.locationButton}
