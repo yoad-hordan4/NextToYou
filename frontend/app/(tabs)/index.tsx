@@ -66,8 +66,12 @@ export default function HomeScreen() {
     setupNotifications();
     
     const subscription = Notifications.addNotificationResponseReceivedListener(response => {
-      const data = response.notification.request.content.data as { url?: string };
-      if (data?.url) Linking.openURL(data.url);
+      const data = response.notification.request.content.data as { lat?: number; lon?: number; storeName?: string };
+      if (data?.lat && data?.lon) {
+        // Show map selection dialog instead of opening directly
+        const store = { lat: data.lat, lon: data.lon, store: data.storeName || 'Store' };
+        openNavigationOptions(store);
+      }
     });
     return () => subscription.remove();
   }, []);
@@ -234,7 +238,7 @@ export default function HomeScreen() {
             content: {
               title: `🎯 Near ${deal.store}!`,
               body: `Found: ${foundItem.item} (₪${foundItem.price}) - ${deal.distance}m away`,
-              data: { url: `maps://0,0?q=${deal.lat},${deal.lon}(${deal.store})` },
+              data: { lat: deal.lat, lon: deal.lon, storeName: deal.store },
             },
             trigger: null,
           });
@@ -302,30 +306,42 @@ export default function HomeScreen() {
         const session = await AsyncStorage.getItem('user_session');
         if (!session) { setIsTracking(false); return; }
 
+        const currentUserData = JSON.parse(session);
         const currentHour = new Date().getHours();
-        const { active_start_hour, active_end_hour } = userData;
+        const { active_start_hour, active_end_hour } = currentUserData;
         const isActiveTime = currentHour >= active_start_hour && currentHour < active_end_hour;
+
+        console.log(`[DEBUG] Time check - Current: ${currentHour}, Active: ${active_start_hour}-${active_end_hour}, IsActive: ${isActiveTime}`);
 
         if (isActiveTime) {
             setIsTracking(true);
-            let loc = await Location.getCurrentPositionAsync({});
-            setLocation(loc);
-            console.log(`[DEBUG] Location updated: ${loc.coords.latitude}, ${loc.coords.longitude}`);
-            checkProximity(loc.coords.latitude, loc.coords.longitude, userData.username);
+            try {
+              let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+              setLocation(loc);
+              console.log(`[DEBUG] Location updated: ${loc.coords.latitude}, ${loc.coords.longitude}`);
+              checkProximity(loc.coords.latitude, loc.coords.longitude, currentUserData.username);
+            } catch (e) {
+              console.log("[ERROR] Failed to update location:", e);
+            }
         } else {
             setIsTracking(false);
+            console.log(`[DEBUG] Outside active hours - sleeping`);
         }
     };
     
+    // Get initial location immediately
     try {
-      let loc = await Location.getCurrentPositionAsync({});
+      let loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       setLocation(loc);
       console.log(`[DEBUG] Initial location: ${loc.coords.latitude}, ${loc.coords.longitude}`);
     } catch (e) {
-      console.log("[ERROR] Failed to get location:", e);
+      console.log("[ERROR] Failed to get initial location:", e);
     }
     
-    checkTimeAndTrack();
+    // Do immediate check to set correct status
+    await checkTimeAndTrack();
+    
+    // Then check every 30 seconds
     const intervalId = setInterval(checkTimeAndTrack, 30000); 
     return () => clearInterval(intervalId);
   };
@@ -354,7 +370,7 @@ export default function HomeScreen() {
                     content: {
                         title: `🎯 Near ${deal.store}!`,
                         body: `Found: ${foundItem.item} (₪${foundItem.price}) - ${deal.distance}m away`,
-                        data: { url: `maps://0,0?q=${deal.lat},${deal.lon}(${deal.store})` },
+                        data: { lat: deal.lat, lon: deal.lon, storeName: deal.store },
                     },
                     trigger: null,
                  });
@@ -445,7 +461,7 @@ export default function HomeScreen() {
                 content: {
                     title: `✨ Found "${query}"!`,
                     body: `${nearestStore.store} has it for ₪${item.price} - ${nearestStore.distance}m away`,
-                    data: { url: `maps://0,0?q=${nearestStore.lat},${nearestStore.lon}(${nearestStore.store})` },
+                    data: { lat: nearestStore.lat, lon: nearestStore.lon, storeName: nearestStore.store },
                 },
                 trigger: null,
             });
