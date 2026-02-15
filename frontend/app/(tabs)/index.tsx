@@ -7,6 +7,7 @@ import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { API_BASE, API_HEADERS } from '@/constants/config';
+import TaskCreationModal from '@/components/TaskCreationModal';
 
 // Enable Animations
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -34,17 +35,12 @@ interface Task {
   category: string;
 }
 
-interface NavigationApp {
-  name: string;
-  scheme: string;
-  available: boolean;
-}
-
 export default function HomeScreen() {
   const [user, setUser] = useState<any>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [text, setText] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('Supermarket');
+  
+  // Task Creation Modal
+  const [createModalVisible, setCreateModalVisible] = useState(false);
   
   // Edit Mode
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
@@ -60,8 +56,8 @@ export default function HomeScreen() {
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
   const [itemDeals, setItemDeals] = useState<any[]>([]);
   
-  // Navigation
-  const [selectedStore, setSelectedStore] = useState<any>(null);
+  // Time reminder checker
+  const [timeReminderCheckInterval, setTimeReminderCheckInterval] = useState<any>(null);
   
   const notifiedDealsRef = useRef<Set<string>>(new Set());
 
@@ -75,6 +71,42 @@ export default function HomeScreen() {
     });
     return () => subscription.remove();
   }, []);
+
+  // Check time-based reminders
+  useEffect(() => {
+    if (!user) return;
+    
+    // Check time-based reminders every minute
+    const interval = setInterval(async () => {
+      try {
+        const response = await fetch(`${API_BASE}/check-time-reminders/${user.username}`, {
+          headers: API_HEADERS
+        });
+        
+        const data = await response.json();
+        const reminders = data.reminders || [];
+        
+        for (const reminder of reminders) {
+          console.log(`[DEBUG] Time reminder triggered:`, reminder);
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: `⏰ Time Reminder`,
+              body: `Don't forget: ${reminder.task_title}`,
+            },
+            trigger: null,
+          });
+        }
+      } catch (e) {
+        console.log('[ERROR] Time reminder check failed:', e);
+      }
+    }, 60000); // Check every minute
+    
+    setTimeReminderCheckInterval(interval);
+    
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [user]);
 
   const setupNotifications = async () => {
     const { status } = await Notifications.requestPermissionsAsync();
@@ -119,7 +151,6 @@ export default function HomeScreen() {
         await startBackgroundLocationTracking(userData);
       } else {
         setHasBackgroundPermission(false);
-        // Show explanation that background tracking needs "Always Allow"
         Alert.alert(
           "Enable Background Tracking",
           "For the best experience, allow NextToYou to access your location 'Always'. This lets us notify you about nearby deals even when the app is closed.\n\n⚠️ Note: Background location only works in the standalone app, not Expo Go.",
@@ -128,20 +159,17 @@ export default function HomeScreen() {
             { text: "Open Settings", onPress: () => Linking.openSettings() }
           ]
         );
-        // Fall back to foreground tracking
         startSmartTracking(userData);
       }
     } catch (error) {
       console.log('[DEBUG] Background permission not available (probably Expo Go)');
       setHasBackgroundPermission(false);
-      // Fall back to foreground tracking
       startSmartTracking(userData);
     }
   };
 
   const startBackgroundLocationTracking = async (userData: any) => {
     try {
-      // Define the background task
       TaskManager.defineTask(LOCATION_TASK_NAME, async ({ data, error }: any) => {
         if (error) {
           console.error('[ERROR] Background location error:', error);
@@ -151,7 +179,6 @@ export default function HomeScreen() {
           const { locations } = data;
           const location = locations[0];
           
-          // Check proximity in background
           const session = await AsyncStorage.getItem('user_session');
           if (session) {
             const userData = JSON.parse(session);
@@ -171,11 +198,10 @@ export default function HomeScreen() {
         }
       });
 
-      // Start background location updates
       await Location.startLocationUpdatesAsync(LOCATION_TASK_NAME, {
         accuracy: Location.Accuracy.Balanced,
-        timeInterval: 30000, // 30 seconds
-        distanceInterval: 100, // 100 meters
+        timeInterval: 30000,
+        distanceInterval: 100,
         foregroundService: {
           notificationTitle: "NextToYou is tracking nearby deals",
           notificationBody: "We'll notify you when you're near items on your list",
@@ -186,7 +212,6 @@ export default function HomeScreen() {
       console.log('[DEBUG] Background location tracking started');
     } catch (error) {
       console.error('[ERROR] Failed to start background tracking:', error);
-      // Fall back to foreground
       startSmartTracking(userData);
     }
   };
@@ -205,9 +230,6 @@ export default function HomeScreen() {
       
       for (const deal of currentDeals) {
         for (const foundItem of deal.found_items) {
-          const uniqueId = `${deal.store}|${foundItem.item}`;
-          
-          // Send notification
           await Notifications.scheduleNotificationAsync({
             content: {
               title: `🎯 Near ${deal.store}!`,
@@ -218,16 +240,32 @@ export default function HomeScreen() {
           });
         }
       }
+      
+      // Handle location-based reminders
+      const locationReminders = data.location_reminders || [];
+      for (const reminder of locationReminders) {
+        console.log(`[DEBUG] Location reminder triggered:`, reminder);
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: `🚗 Leaving ${reminder.location_type}?`,
+            body: `Don't forget: ${reminder.task_title}`,
+          },
+          trigger: null,
+        });
+      }
     } catch (e) { 
       console.log("[ERROR] Background proximity error", e); 
     }
   };
 
   const logout = async () => {
-    // Stop background tracking
     const isTaskDefined = await TaskManager.isTaskDefined(LOCATION_TASK_NAME);
     if (isTaskDefined) {
       await Location.stopLocationUpdatesAsync(LOCATION_TASK_NAME);
+    }
+    
+    if (timeReminderCheckInterval) {
+      clearInterval(timeReminderCheckInterval);
     }
     
     await AsyncStorage.removeItem('user_session');
@@ -279,7 +317,6 @@ export default function HomeScreen() {
         }
     };
     
-    // Get initial location
     try {
       let loc = await Location.getCurrentPositionAsync({});
       setLocation(loc);
@@ -325,6 +362,19 @@ export default function HomeScreen() {
         }
       }
       notifiedDealsRef.current = currentDealIds;
+      
+      // Handle location-based reminders
+      const locationReminders = data.location_reminders || [];
+      for (const reminder of locationReminders) {
+        console.log(`[DEBUG] Location reminder triggered:`, reminder);
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: `🚗 Leaving ${reminder.location_type}?`,
+            body: `Don't forget: ${reminder.task_title}`,
+          },
+          trigger: null,
+        });
+      }
     } catch (e) { 
       console.log("[ERROR] Proximity error", e); 
     }
@@ -342,28 +392,36 @@ export default function HomeScreen() {
     } catch(e) { console.log(e); }
   };
 
-  const handleAdd = async () => {
-    if (!text || !user) return;
+  const handleCreateTask = async (title: string, category: string, reminder: any) => {
+    if (!user) return;
     
-    console.log(`[DEBUG] Adding task: ${text}`);
+    console.log(`[DEBUG] Creating task:`, { title, category, reminder });
     
     const response = await fetch(`${API_BASE}/tasks`, {
       method: 'POST',
       headers: API_HEADERS,
-      body: JSON.stringify({ title: text, category: selectedCategory, user_id: user.username }),
+      body: JSON.stringify({ 
+        title, 
+        category, 
+        user_id: user.username,
+        reminder 
+      }),
     });
     
     if (response.ok) {
       console.log('[DEBUG] Task created successfully');
+      
+      // If no reminder or leaving reminder, search immediately
+      if (!reminder || reminder.type === 'none' || 
+          reminder.type === 'leaving_home' || 
+          reminder.type === 'leaving_work' || 
+          reminder.type === 'custom_location') {
+        if (location) {
+          await performSearchAndNotify(title, location.coords.latitude, location.coords.longitude);
+        }
+      }
     }
     
-    // Immediately check if nearby when adding
-    if (location) {
-      console.log(`[DEBUG] Checking for newly added item immediately`);
-      await performSearchAndNotify(text, location.coords.latitude, location.coords.longitude);
-    }
-    
-    setText('');
     fetchTasks(user.username);
   };
 
@@ -379,7 +437,6 @@ export default function HomeScreen() {
         
         console.log(`[DEBUG] Search results for "${query}":`, results.length);
         
-        // Send notification for any nearby results
         if (results.length > 0) {
             const nearestStore = results[0];
             const item = nearestStore.found_items[0];
@@ -466,8 +523,6 @@ export default function HomeScreen() {
   };
 
   const openNavigationOptions = (store: any) => {
-    setSelectedStore(store);
-    
     const options = [
       'Apple Maps',
       'Google Maps', 
@@ -489,7 +544,6 @@ export default function HomeScreen() {
         }
       );
     } else {
-      // Android - show custom modal
       Alert.alert(
         `Navigate to ${store.store}`,
         'Choose navigation app:',
@@ -542,6 +596,9 @@ export default function HomeScreen() {
         <View style={styles.headerRow}>
             <Text style={styles.header}>My List</Text>
             <View style={{flexDirection: 'row', gap: 15}}>
+              <TouchableOpacity onPress={() => router.push('/settings')}>
+                <Text style={{fontSize: 24}}>⚙️</Text>
+              </TouchableOpacity>
               <TouchableOpacity onPress={logout}><Text style={{color:'blue'}}>Logout</Text></TouchableOpacity>
               <TouchableOpacity onPress={deleteAccount}><Text style={{color:'red'}}>Delete</Text></TouchableOpacity>
             </View>
@@ -551,22 +608,12 @@ export default function HomeScreen() {
           {location && ` • 📍 ${location.coords.latitude.toFixed(4)}, ${location.coords.longitude.toFixed(4)}`}
         </Text>
 
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-          <View style={styles.inputCard}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom: 10}}>
-              {CATEGORIES.map(cat => (
-                <TouchableOpacity key={cat} onPress={() => setSelectedCategory(cat)}
-                  style={[styles.catChip, selectedCategory === cat && styles.catChipActive]}>
-                  <Text style={[styles.catText, selectedCategory === cat && styles.catTextActive]}>{cat}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <View style={styles.inputWrapper}>
-              <TextInput style={styles.input} placeholder="Add new item..." value={text} onChangeText={setText} />
-              <Button title="Add" onPress={handleAdd} />
-            </View>
-          </View>
-        </KeyboardAvoidingView>
+        <TouchableOpacity 
+          style={styles.createTaskButton}
+          onPress={() => setCreateModalVisible(true)}
+        >
+          <Text style={styles.createTaskButtonText}>+ Add Task</Text>
+        </TouchableOpacity>
 
         <FlatList
           data={tasks}
@@ -579,7 +626,7 @@ export default function HomeScreen() {
               </TouchableOpacity>
               <View style={styles.actions}>
                 <TouchableOpacity onPress={() => startEdit(item)} style={styles.editBtn}><Text style={{color: '#007AFF'}}>Edit</Text></TouchableOpacity>
-                <TouchableOpacity onPress={() => deleteTask(item.id)}><Text style={styles.deleteText}>Done</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => deleteTask(item.id)}><Text style={{color: 'red', fontWeight: '600'}}>Done</Text></TouchableOpacity>
               </View>
             </View>
           )}
@@ -674,6 +721,13 @@ export default function HomeScreen() {
             />
           </View>
         </Modal>
+
+        <TaskCreationModal
+          visible={createModalVisible}
+          onClose={() => setCreateModalVisible(false)}
+          onCreateTask={handleCreateTask}
+          categories={CATEGORIES}
+        />
       </View>
     </SafeAreaView>
   );
@@ -685,19 +739,23 @@ const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 20 },
   header: { fontSize: 32, fontWeight: '800', color: '#333' },
   subHeader: { color: '#666', marginBottom: 20, marginTop: 5, fontSize: 12 },
-  inputCard: { backgroundColor: 'white', padding: 15, borderRadius: 15, marginBottom: 15, elevation: 3 },
-  inputWrapper: { flexDirection: 'row', gap: 10, alignItems: 'center' },
-  input: { flex: 1, backgroundColor: '#F9F9F9', padding: 12, borderRadius: 10, borderWidth: 1, borderColor: '#eee' },
-  catChip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, backgroundColor: '#eee', marginRight: 8 },
-  catChipActive: { backgroundColor: '#007AFF' },
-  catText: { color: '#666', fontSize: 12, fontWeight: '600' },
-  catTextActive: { color: 'white' },
+  createTaskButton: {
+    backgroundColor: '#007AFF',
+    padding: 18,
+    borderRadius: 15,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  createTaskButtonText: {
+    color: 'white',
+    fontSize: 18,
+    fontWeight: '700',
+  },
   taskItem: { backgroundColor: 'white', padding: 15, borderRadius: 10, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', elevation: 2 },
   taskTitle: { fontSize: 18, fontWeight: '600', color: '#333' },
   taskCategory: { color: '#888', fontSize: 12, marginTop: 2 },
   actions: { flexDirection: 'row', gap: 15 },
   editBtn: { marginRight: 5 },
-  deleteText: { color: 'red', fontWeight: '600' },
   modalContainer: { flex: 1, backgroundColor: '#fff' },
   modalHeader: { padding: 20, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: 'white', zIndex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   modalTitle: { fontSize: 20, fontWeight: 'bold' },
