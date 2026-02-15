@@ -1,6 +1,6 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
-import { Platform } from 'react-native';
+import { Platform, Text } from 'react-native';
 
 export default function TabLayout() {
   return (
@@ -26,33 +26,14 @@ export default function TabLayout() {
         name="index"
         options={{
           title: 'My List',
-          tabBarIcon: ({ color }) => <span style={{ fontSize: 24 }}>📝</span>,
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>📝</Text>,
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
-          tabBarIcon: ({ color }) => <span style={{ fontSize: 24 }}>⚙️</span>,
-        }}
-      />
-      {/* Hide these screens from tabs */}
-      <Tabs.Screen
-        name="(auth)"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="(tabs)"
-        options={{
-          href: null,
-        }}
-      />
-      <Tabs.Screen
-        name="modal"
-        options={{
-          href: null,
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 24 }}>⚙️</Text>,
         }}
       />
     </Tabs>
