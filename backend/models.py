@@ -4,8 +4,8 @@ from typing import Optional, Literal
 class User(BaseModel):
     username: str
     password: str
-    active_start_hour: int = 8
-    active_end_hour: int = 22
+    active_start_time: str = "08:00"  # Changed to HH:MM format
+    active_end_time: str = "22:00"    # Changed to HH:MM format
     notification_radius: int = 500  # in meters
     # Location settings
     home_latitude: Optional[float] = None
@@ -51,6 +51,6 @@ class UserSettingsUpdate(BaseModel):
     work_latitude: Optional[float] = None
     work_longitude: Optional[float] = None
     work_address: Optional[str] = None
-    active_start_hour: Optional[int] = None
-    active_end_hour: Optional[int] = None
+    active_start_time: Optional[str] = None  # HH:MM format
+    active_end_time: Optional[str] = None    # HH:MM format
     notification_radius: Optional[int] = None

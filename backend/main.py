@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
@@ -23,7 +23,7 @@ app.add_middleware(
 # --- FILE BASED DATABASE ---
 USERS_FILE = "users_db.json"
 TASKS_FILE = "tasks_db.json"
-GEOFENCE_STATE_FILE = "geofence_state.json"  # Track when users were inside geofences
+GEOFENCE_STATE_FILE = "geofence_state.json"
 
 def load_data(filename, default):
     if not os.path.exists(filename):
@@ -45,7 +45,7 @@ def save_data(filename, data):
 # Load DBs on startup
 users_db = load_data(USERS_FILE, {}) 
 tasks_db = load_data(TASKS_FILE, []) 
-geofence_state = load_data(GEOFENCE_STATE_FILE, {})  # {user_id: {task_id: {inside: bool, location_type: str}}}
+geofence_state = load_data(GEOFENCE_STATE_FILE, {})
 
 class ItemSearch(BaseModel):
     latitude: float
@@ -61,6 +61,38 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = None
     category: Optional[str] = None
     reminder: Optional[ReminderConfig] = None
+
+def is_within_active_time(user: dict) -> bool:
+    """Check if current time is within user's active hours"""
+    now = datetime.now()
+    current_time = now.time()
+    
+    # Get user's active times (format: "HH:MM")
+    start_time_str = user.get('active_start_time', '08:00')
+    end_time_str = user.get('active_end_time', '22:00')
+    
+    # Parse times
+    try:
+        start_hour, start_min = map(int, start_time_str.split(':'))
+        end_hour, end_min = map(int, end_time_str.split(':'))
+        
+        start_time = time(start_hour, start_min)
+        end_time = time(end_hour, end_min)
+        
+        # Handle overnight ranges (e.g., 22:00 to 06:00)
+        if start_time <= end_time:
+            return start_time <= current_time <= end_time
+        else:
+            return current_time >= start_time or current_time <= end_time
+    except:
+        # Fallback to old hour-only format for backwards compatibility
+        try:
+            start_hour = user.get('active_start_hour', 8)
+            end_hour = user.get('active_end_hour', 22)
+            current_hour = now.hour
+            return start_hour <= current_hour < end_hour
+        except:
+            return True  # Default to always active if parsing fails
 
 @app.get("/")
 def read_root():
@@ -93,15 +125,12 @@ def delete_account(req: DeleteRequest):
     if users_db[req.username]["password"] != req.password:
         raise HTTPException(status_code=401, detail="Wrong password")
 
-    # Delete user
     del users_db[req.username]
     save_data(USERS_FILE, users_db)
 
-    # Delete tasks
     tasks_db = [t for t in tasks_db if t.get('user_id') != req.username]
     save_data(TASKS_FILE, tasks_db)
     
-    # Delete geofence state
     if req.username in geofence_state:
         del geofence_state[req.username]
         save_data(GEOFENCE_STATE_FILE, geofence_state)
@@ -125,7 +154,6 @@ def update_user_settings(username: str, settings: UserSettingsUpdate):
     
     user = users_db[username]
     
-    # Update only provided fields
     update_dict = settings.dict(exclude_unset=True)
     for key, value in update_dict.items():
         if value is not None:
@@ -204,21 +232,22 @@ def check_proximity(loc: LocationUpdate):
         if not user:
             return {"message": "User not found", "nearby": [], "location_reminders": []}
         
+        # Check if within active time
+        if not is_within_active_time(user):
+            print(f"[DEBUG] Outside active time for user {loc.user_id}")
+            return {"message": "Outside active hours", "nearby": [], "location_reminders": []}
+        
         radius = user.get('notification_radius', 500)
         
-        # Get active tasks
         user_tasks = [t for t in tasks_db if t.get('user_id') == loc.user_id and not t.get('is_completed', False)]
         
-        # Split tasks by reminder type
         shopping_tasks = [t['title'] for t in user_tasks if not t.get('reminder') or t.get('reminder', {}).get('type') == 'none']
         location_reminder_tasks = [t for t in user_tasks if t.get('reminder') and t.get('reminder', {}).get('type') in ['leaving_home', 'leaving_work', 'custom_location']]
         
-        # Check for nearby deals (shopping tasks)
         deals = []
         if shopping_tasks:
             deals = find_nearby_deals(loc.latitude, loc.longitude, shopping_tasks, radius=radius)
         
-        # Check for location-based reminders (geofencing)
         location_reminders = check_location_reminders(loc.user_id, loc.latitude, loc.longitude, location_reminder_tasks, user)
         
         print(f"[DEBUG] Found {len(deals)} deals and {len(location_reminders)} location reminders")
@@ -235,10 +264,6 @@ def check_proximity(loc: LocationUpdate):
         raise HTTPException(status_code=500, detail=f"Error checking proximity: {str(e)}")
 
 def check_location_reminders(user_id: str, lat: float, lon: float, tasks: list, user: dict) -> list:
-    """
-    Check if user is leaving a geofenced area and should be reminded about tasks.
-    Returns list of tasks to remind about.
-    """
     global geofence_state
     
     reminders = []
@@ -251,7 +276,6 @@ def check_location_reminders(user_id: str, lat: float, lon: float, tasks: list, 
         reminder = task.get('reminder', {})
         reminder_type = reminder.get('type')
         
-        # Get the location to check based on reminder type
         check_lat, check_lon = None, None
         location_name = ""
         
@@ -269,26 +293,21 @@ def check_location_reminders(user_id: str, lat: float, lon: float, tasks: list, 
             location_name = reminder.get('custom_address', 'custom location')
         
         if check_lat is None or check_lon is None:
-            continue  # Location not set
+            continue
         
-        # Calculate distance
         distance = haversine_distance(lat, lon, check_lat, check_lon)
-        leaving_radius = reminder.get('leaving_radius', 200)  # meters
+        leaving_radius = reminder.get('leaving_radius', 200)
         
-        # Check if inside the geofence
         is_inside = distance <= leaving_radius
         
-        # Get previous state
         prev_state = geofence_state[user_id].get(task_id, {})
         was_inside = prev_state.get('inside', False)
         
-        # Update state
         geofence_state[user_id][task_id] = {
             'inside': is_inside,
             'location_type': location_name
         }
         
-        # Trigger reminder if transitioning from inside to outside
         if was_inside and not is_inside:
             print(f"[DEBUG] User {user_id} leaving {location_name} - remind about task: {task['title']}")
             reminders.append({
@@ -323,14 +342,10 @@ def search_item(search: ItemSearch):
 # --- TIME-BASED REMINDERS ---
 @app.get("/check-time-reminders/{user_id}")
 def check_time_reminders(user_id: str):
-    """
-    Check if any time-based reminders should trigger.
-    Call this periodically from the frontend.
-    """
     try:
         now = datetime.now()
         current_time = now.strftime("%H:%M")
-        current_day = now.strftime("%a").lower()[:3]  # mon, tue, wed, etc.
+        current_day = now.strftime("%a").lower()[:3]
         
         user_tasks = [t for t in tasks_db if t.get('user_id') == user_id and not t.get('is_completed', False)]
         
@@ -347,9 +362,7 @@ def check_time_reminders(user_id: str):
             if not reminder_time:
                 continue
             
-            # Check if time matches (within 1 minute window)
             if reminder_time == current_time or abs(time_diff_minutes(reminder_time, current_time)) <= 1:
-                # Check if day matches
                 if 'everyday' in reminder_days or current_day in reminder_days:
                     due_reminders.append({
                         'task_id': task['id'],

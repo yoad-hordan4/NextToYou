@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Platform } from 'react-native';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router } from 'expo-router';
 import { API_BASE, API_HEADERS } from '@/constants/config';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import { GOOGLE_PLACES_API_KEY } from '../constants/apiKeys';
 
 export default function SettingsScreen() {
   const [user, setUser] = useState<any>(null);
@@ -19,9 +22,13 @@ export default function SettingsScreen() {
   const [workLat, setWorkLat] = useState<number | null>(null);
   const [workLon, setWorkLon] = useState<number | null>(null);
   
+  // Time settings
+  const [startTime, setStartTime] = useState(new Date());
+  const [endTime, setEndTime] = useState(new Date());
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
+  
   // Other settings
-  const [startHour, setStartHour] = useState('8');
-  const [endHour, setEndHour] = useState('22');
   const [radius, setRadius] = useState('500');
   
   const [saving, setSaving] = useState(false);
@@ -41,7 +48,6 @@ export default function SettingsScreen() {
       const userData = JSON.parse(session);
       setUser(userData);
       
-      // Fetch latest settings from server
       const response = await fetch(`${API_BASE}/user/${userData.username}/settings`, {
         headers: API_HEADERS
       });
@@ -49,19 +55,30 @@ export default function SettingsScreen() {
       if (response.ok) {
         const settings = await response.json();
         
-        // Load home location
+        // Load locations
         if (settings.home_address) setHomeAddress(settings.home_address);
         if (settings.home_latitude) setHomeLat(settings.home_latitude);
         if (settings.home_longitude) setHomeLon(settings.home_longitude);
         
-        // Load work location
         if (settings.work_address) setWorkAddress(settings.work_address);
         if (settings.work_latitude) setWorkLat(settings.work_latitude);
         if (settings.work_longitude) setWorkLon(settings.work_longitude);
         
-        // Load other settings
-        setStartHour(settings.active_start_hour?.toString() || '8');
-        setEndHour(settings.active_end_hour?.toString() || '22');
+        // Load times (HH:MM format)
+        if (settings.active_start_time) {
+          const [h, m] = settings.active_start_time.split(':');
+          const date = new Date();
+          date.setHours(parseInt(h), parseInt(m));
+          setStartTime(date);
+        }
+        
+        if (settings.active_end_time) {
+          const [h, m] = settings.active_end_time.split(':');
+          const date = new Date();
+          date.setHours(parseInt(h), parseInt(m));
+          setEndTime(date);
+        }
+        
         setRadius(settings.notification_radius?.toString() || '500');
       }
       
@@ -84,7 +101,6 @@ export default function SettingsScreen() {
       setHomeLat(location.coords.latitude);
       setHomeLon(location.coords.longitude);
       
-      // Try to get address from coordinates
       const addresses = await Location.reverseGeocodeAsync({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude
@@ -115,7 +131,6 @@ export default function SettingsScreen() {
       setWorkLat(location.coords.latitude);
       setWorkLon(location.coords.longitude);
       
-      // Try to get address from coordinates
       const addresses = await Location.reverseGeocodeAsync({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude
@@ -134,6 +149,12 @@ export default function SettingsScreen() {
     }
   };
 
+  const formatTime = (date: Date): string => {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
+  };
+
   const saveSettings = async () => {
     if (!user) return;
     
@@ -147,8 +168,8 @@ export default function SettingsScreen() {
         work_address: workAddress || null,
         work_latitude: workLat,
         work_longitude: workLon,
-        active_start_hour: parseInt(startHour),
-        active_end_hour: parseInt(endHour),
+        active_start_time: formatTime(startTime),
+        active_end_time: formatTime(endTime),
         notification_radius: parseInt(radius)
       };
       
@@ -160,11 +181,9 @@ export default function SettingsScreen() {
       
       if (response.ok) {
         const updatedUser = await response.json();
-        
-        // Update local session
         await AsyncStorage.setItem('user_session', JSON.stringify(updatedUser.user));
-        
-        Alert.alert('Success', 'Settings saved successfully!');
+        Alert.alert('Success', 'Settings saved!');
+        router.back(); // Navigate back to main screen
       } else {
         Alert.alert('Error', 'Failed to save settings');
       }
@@ -196,55 +215,107 @@ export default function SettingsScreen() {
       {/* Home Location */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>🏠 Home Location</Text>
-        <Text style={styles.subtitle}>Used for &quot;remind me when leaving home&quot; tasks</Text>
+        <Text style={styles.subtitle}>Used for &quot;remind me when leaving home&quot;</Text>
         
-        <TextInput
-          style={styles.input}
-          placeholder="Home address (optional)"
-          value={homeAddress}
-          onChangeText={setHomeAddress}
-          multiline
-        />
-        
-        {homeLat && homeLon && (
-          <Text style={styles.coordText}>
-            📍 {homeLat.toFixed(6)}, {homeLon.toFixed(6)}
-          </Text>
+        {homeLat && homeLon ? (
+          <View style={styles.locationSet}>
+            <Text style={styles.addressText}>{homeAddress || 'Location set'}</Text>
+            <Text style={styles.coordText}>
+              📍 {homeLat.toFixed(6)}, {homeLon.toFixed(6)}
+            </Text>
+            <TouchableOpacity 
+              style={styles.clearButton}
+              onPress={() => {
+                setHomeAddress('');
+                setHomeLat(null);
+                setHomeLon(null);
+              }}
+            >
+              <Text style={styles.clearButtonText}>Clear Location</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.locationEmpty}>
+            <GooglePlacesAutocomplete
+              placeholder='Search for home address...'
+              onPress={(data, details = null) => {
+                if (details) {
+                  setHomeLat(details.geometry.location.lat);
+                  setHomeLon(details.geometry.location.lng);
+                  setHomeAddress(data.description);
+                }
+              }}
+              query={{
+                key: GOOGLE_PLACES_API_KEY,
+                language: 'en',
+              }}
+              fetchDetails={true}
+              styles={{
+                textInput: styles.googlePlacesInput,
+                container: { flex: 0 },
+              }}
+            />
+            <TouchableOpacity 
+              style={styles.locationButton}
+              onPress={setCurrentLocationAsHome}
+            >
+              <Text style={styles.locationButtonText}>📍 Use Current Location</Text>
+            </TouchableOpacity>
+          </View>
         )}
-        
-        <TouchableOpacity 
-          style={styles.locationButton}
-          onPress={setCurrentLocationAsHome}
-        >
-          <Text style={styles.locationButtonText}>📍 Use Current Location</Text>
-        </TouchableOpacity>
       </View>
 
       {/* Work Location */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>💼 Work Location</Text>
-        <Text style={styles.subtitle}>Used for &quot;remind me when leaving work&quot; tasks</Text>
+        <Text style={styles.subtitle}>Used for &quot;remind me when leaving work&quot;</Text>
         
-        <TextInput
-          style={styles.input}
-          placeholder="Work address (optional)"
-          value={workAddress}
-          onChangeText={setWorkAddress}
-          multiline
-        />
-        
-        {workLat && workLon && (
-          <Text style={styles.coordText}>
-            📍 {workLat.toFixed(6)}, {workLon.toFixed(6)}
-          </Text>
+        {workLat && workLon ? (
+          <View style={styles.locationSet}>
+            <Text style={styles.addressText}>{workAddress || 'Location set'}</Text>
+            <Text style={styles.coordText}>
+              📍 {workLat.toFixed(6)}, {workLon.toFixed(6)}
+            </Text>
+            <TouchableOpacity 
+              style={styles.clearButton}
+              onPress={() => {
+                setWorkAddress('');
+                setWorkLat(null);
+                setWorkLon(null);
+              }}
+            >
+              <Text style={styles.clearButtonText}>Clear Location</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <View style={styles.locationEmpty}>
+            <GooglePlacesAutocomplete
+              placeholder='Search for work address...'
+              onPress={(data, details = null) => {
+                if (details) {
+                  setWorkLat(details.geometry.location.lat);
+                  setWorkLon(details.geometry.location.lng);
+                  setWorkAddress(data.description);
+                }
+              }}
+              query={{
+                key: GOOGLE_PLACES_API_KEY,
+                language: 'en',
+              }}
+              fetchDetails={true}
+              styles={{
+                textInput: styles.googlePlacesInput,
+                container: { flex: 0 },
+              }}
+            />
+            <TouchableOpacity 
+              style={styles.locationButton}
+              onPress={setCurrentLocationAsWork}
+            >
+              <Text style={styles.locationButtonText}>📍 Use Current Location</Text>
+            </TouchableOpacity>
+          </View>
         )}
-        
-        <TouchableOpacity 
-          style={styles.locationButton}
-          onPress={setCurrentLocationAsWork}
-        >
-          <Text style={styles.locationButtonText}>📍 Use Current Location</Text>
-        </TouchableOpacity>
       </View>
 
       {/* Active Hours */}
@@ -252,43 +323,53 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>⏰ Active Hours</Text>
         <Text style={styles.subtitle}>Only track location during these hours to save battery</Text>
         
-        <View style={styles.row}>
-          <View style={styles.halfInput}>
-            <Text style={styles.label}>Start Hour (0-23)</Text>
-            <TextInput
-              style={styles.input}
-              value={startHour}
-              onChangeText={setStartHour}
-              keyboardType="numeric"
-              placeholder="8"
-            />
+        <View style={styles.timeRow}>
+          <View style={styles.timeInput}>
+            <Text style={styles.label}>Start Time</Text>
+            <TouchableOpacity 
+              style={styles.timeButton}
+              onPress={() => setShowStartPicker(true)}
+            >
+              <Text style={styles.timeButtonText}>{formatTime(startTime)}</Text>
+            </TouchableOpacity>
           </View>
           
-          <View style={styles.halfInput}>
-            <Text style={styles.label}>End Hour (0-23)</Text>
-            <TextInput
-              style={styles.input}
-              value={endHour}
-              onChangeText={setEndHour}
-              keyboardType="numeric"
-              placeholder="22"
-            />
+          <View style={styles.timeInput}>
+            <Text style={styles.label}>End Time</Text>
+            <TouchableOpacity 
+              style={styles.timeButton}
+              onPress={() => setShowEndPicker(true)}
+            >
+              <Text style={styles.timeButtonText}>{formatTime(endTime)}</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </View>
 
-      {/* Notification Radius */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>📍 Detection Radius</Text>
-        <Text style={styles.subtitle}>How close you need to be to get notified (meters)</Text>
-        
-        <TextInput
-          style={styles.input}
-          value={radius}
-          onChangeText={setRadius}
-          keyboardType="numeric"
-          placeholder="500"
-        />
+        {showStartPicker && (
+          <DateTimePicker
+            value={startTime}
+            mode="time"
+            is24Hour={true}
+            display="default"
+            onChange={(event, selectedDate) => {
+              setShowStartPicker(Platform.OS === 'ios');
+              if (selectedDate) setStartTime(selectedDate);
+            }}
+          />
+        )}
+
+        {showEndPicker && (
+          <DateTimePicker
+            value={endTime}
+            mode="time"
+            is24Hour={true}
+            display="default"
+            onChange={(event, selectedDate) => {
+              setShowEndPicker(Platform.OS === 'ios');
+              if (selectedDate) setEndTime(selectedDate);
+            }}
+          />
+        )}
       </View>
 
       {/* Save Button */}
@@ -354,25 +435,41 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 5,
   },
-  input: {
+  locationSet: {
+    backgroundColor: '#F0F8FF',
+    padding: 15,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  locationEmpty: {
+    minHeight: 100,
+  },
+  addressText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 5,
+  },
+  coordText: {
+    fontSize: 12,
+    color: '#666',
+    marginBottom: 10,
+    fontFamily: 'monospace',
+  },
+  googlePlacesInput: {
     backgroundColor: '#F9F9F9',
     padding: 12,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#eee',
     fontSize: 16,
-  },
-  coordText: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 8,
-    fontFamily: 'monospace',
+    marginBottom: 10,
   },
   locationButton: {
     backgroundColor: '#007AFF',
     padding: 12,
     borderRadius: 10,
-    marginTop: 10,
     alignItems: 'center',
   },
   locationButtonText: {
@@ -380,12 +477,36 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
-  row: {
+  clearButton: {
+    backgroundColor: '#FF3B30',
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  clearButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  timeRow: {
     flexDirection: 'row',
     gap: 15,
   },
-  halfInput: {
+  timeInput: {
     flex: 1,
+  },
+  timeButton: {
+    backgroundColor: '#F9F9F9',
+    padding: 15,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#eee',
+    alignItems: 'center',
+  },
+  timeButtonText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
   },
   saveButton: {
     backgroundColor: '#34C759',

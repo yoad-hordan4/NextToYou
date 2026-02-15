@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Modal, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, Alert, Platform } from 'react-native';
 import * as Location from 'expo-location';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import { GOOGLE_PLACES_API_KEY } from '../constants/apiKeys';
 
 interface ReminderConfig {
   type: 'none' | 'leaving_home' | 'leaving_work' | 'custom_location' | 'specific_time';
@@ -31,7 +34,8 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
   const [leavingRadius, setLeavingRadius] = useState('200');
   
   // Time-based
-  const [reminderTime, setReminderTime] = useState('');
+  const [reminderTime, setReminderTime] = useState(new Date());
+  const [showTimePicker, setShowTimePicker] = useState(false);
   const [selectedDays, setSelectedDays] = useState<string[]>(['everyday']);
   
   const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
@@ -44,13 +48,19 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
     setCustomLat(null);
     setCustomLon(null);
     setLeavingRadius('200');
-    setReminderTime('');
+    setReminderTime(new Date());
     setSelectedDays(['everyday']);
+  };
+
+  const formatTime = (date: Date): string => {
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${hours}:${minutes}`;
   };
 
   const handleCreate = () => {
     if (!title.trim()) {
-      Alert.alert('Error', 'Please enter a task title');
+      Alert.alert('Error', 'Please enter a task name');
       return;
     }
 
@@ -68,11 +78,7 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
     }
 
     if (reminderType === 'specific_time') {
-      if (!reminderTime) {
-        Alert.alert('Error', 'Please set a time for the reminder');
-        return;
-      }
-      reminder.time = reminderTime;
+      reminder.time = formatTime(reminderTime);
       reminder.days = selectedDays;
     }
 
@@ -97,7 +103,6 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
       setCustomLat(location.coords.latitude);
       setCustomLon(location.coords.longitude);
       
-      // Try to get address
       const addresses = await Location.reverseGeocodeAsync({
         latitude: location.coords.latitude,
         longitude: location.coords.longitude
@@ -141,13 +146,16 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
           {/* Task Title */}
           <View style={styles.section}>
             <Text style={styles.label}>Task Name</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g., Buy milk"
-              value={title}
-              onChangeText={setTitle}
-              autoFocus
-            />
+            <View style={styles.titleInputContainer}>
+              <input
+                type="text"
+                style={styles.titleInput}
+                placeholder="e.g., Buy milk"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                autoFocus
+              />
+            </View>
           </View>
 
           {/* Category */}
@@ -213,55 +221,101 @@ export default function TaskCreationModal({ visible, onClose, onCreateTask, cate
             <View style={styles.section}>
               <Text style={styles.label}>Custom Location</Text>
               
-              <TextInput
-                style={styles.input}
-                placeholder="Address (optional)"
-                value={customAddress}
-                onChangeText={setCustomAddress}
-                multiline
-              />
-              
-              {customLat && customLon && (
-                <Text style={styles.coordText}>
-                  📍 {customLat.toFixed(6)}, {customLon.toFixed(6)}
-                </Text>
+              {customLat && customLon ? (
+                <View style={styles.locationSet}>
+                  <Text style={styles.addressText}>{customAddress || 'Location set'}</Text>
+                  <Text style={styles.coordText}>
+                    📍 {customLat.toFixed(6)}, {customLon.toFixed(6)}
+                  </Text>
+                  <TouchableOpacity 
+                    style={styles.clearButton}
+                    onPress={() => {
+                      setCustomAddress('');
+                      setCustomLat(null);
+                      setCustomLon(null);
+                    }}
+                  >
+                    <Text style={styles.clearButtonText}>Clear Location</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View>
+                  <GooglePlacesAutocomplete
+                    placeholder='Search for a location...'
+                    onPress={(data, details = null) => {
+                      if (details) {
+                        setCustomLat(details.geometry.location.lat);
+                        setCustomLon(details.geometry.location.lng);
+                        setCustomAddress(data.description);
+                      }
+                    }}
+                    query={{
+                      key: GOOGLE_PLACES_API_KEY,
+                      language: 'en',
+                    }}
+                    fetchDetails={true}
+                    styles={{
+                      textInput: styles.googlePlacesInput,
+                      container: { flex: 0 },
+                    }}
+                  />
+                  
+                  <TouchableOpacity
+                    style={styles.locationButton}
+                    onPress={setCustomLocationToCurrent}
+                  >
+                    <Text style={styles.locationButtonText}>📍 Use Current Location</Text>
+                  </TouchableOpacity>
+                </View>
               )}
-              
-              <TouchableOpacity
-                style={styles.locationButton}
-                onPress={setCustomLocationToCurrent}
-              >
-                <Text style={styles.locationButtonText}>📍 Use Current Location</Text>
-              </TouchableOpacity>
             </View>
           )}
 
-          {/* Leaving Radius (for location-based reminders) */}
+          {/* Leaving Radius */}
           {(reminderType === 'leaving_home' || reminderType === 'leaving_work' || reminderType === 'custom_location') && (
             <View style={styles.section}>
               <Text style={styles.label}>Trigger Distance (meters)</Text>
               <Text style={styles.subtitle}>Remind me when I get this far from the location</Text>
-              <TextInput
-                style={styles.input}
-                value={leavingRadius}
-                onChangeText={setLeavingRadius}
-                keyboardType="numeric"
-                placeholder="200"
-              />
+              <View style={styles.radiusOptions}>
+                {['100', '200', '300', '500'].map(r => (
+                  <TouchableOpacity
+                    key={r}
+                    style={[styles.radiusChip, leavingRadius === r && styles.radiusChipActive]}
+                    onPress={() => setLeavingRadius(r)}
+                  >
+                    <Text style={[styles.radiusText, leavingRadius === r && styles.radiusTextActive]}>
+                      {r}m
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
           )}
 
           {/* Time Settings */}
           {reminderType === 'specific_time' && (
             <View style={styles.section}>
-              <Text style={styles.label}>Time (HH:MM)</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="14:30"
-                value={reminderTime}
-                onChangeText={setReminderTime}
-                keyboardType="numbers-and-punctuation"
-              />
+              <Text style={styles.label}>Time</Text>
+              
+              <TouchableOpacity 
+                style={styles.timeButton}
+                onPress={() => setShowTimePicker(true)}
+              >
+                <Text style={styles.timeButtonText}>{formatTime(reminderTime)}</Text>
+              </TouchableOpacity>
+
+              {showTimePicker && (
+                <DateTimePicker
+                  value={reminderTime}
+                  mode="time"
+                  is24Hour={true}
+                  display="default"
+                  onChange={(event, selectedDate) => {
+                    setShowTimePicker(Platform.OS === 'ios');
+                    if (selectedDate) setReminderTime(selectedDate);
+                  }}
+                />
+              )}
               
               <Text style={styles.label}>Days</Text>
               
@@ -347,13 +401,18 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 8,
   },
-  input: {
+  titleInputContainer: {
     backgroundColor: '#F9F9F9',
     padding: 12,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: '#eee',
+  },
+  titleInput: {
     fontSize: 16,
+    outline: 'none',
+    backgroundColor: 'transparent',
+    width: '100%',
   },
   categoryScroll: {
     marginTop: 5,
@@ -391,23 +450,93 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#333',
   },
+  locationSet: {
+    backgroundColor: '#F0F8FF',
+    padding: 15,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  addressText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 5,
+  },
   coordText: {
     fontSize: 12,
     color: '#666',
-    marginTop: 8,
+    marginBottom: 10,
     fontFamily: 'monospace',
+  },
+  googlePlacesInput: {
+    backgroundColor: '#F9F9F9',
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#eee',
+    fontSize: 16,
+    marginBottom: 10,
   },
   locationButton: {
     backgroundColor: '#007AFF',
     padding: 12,
     borderRadius: 10,
-    marginTop: 10,
     alignItems: 'center',
   },
   locationButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+  },
+  clearButton: {
+    backgroundColor: '#FF3B30',
+    padding: 10,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  clearButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  radiusOptions: {
+    flexDirection: 'row',
+    gap: 10,
+    flexWrap: 'wrap',
+  },
+  radiusChip: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: '#eee',
+    borderWidth: 2,
+    borderColor: '#eee',
+  },
+  radiusChipActive: {
+    backgroundColor: '#F0F8FF',
+    borderColor: '#007AFF',
+  },
+  radiusText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  radiusTextActive: {
+    color: '#007AFF',
+  },
+  timeButton: {
+    backgroundColor: '#F9F9F9',
+    padding: 15,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#eee',
+    alignItems: 'center',
+  },
+  timeButtonText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#333',
   },
   daysRow: {
     flexDirection: 'row',
